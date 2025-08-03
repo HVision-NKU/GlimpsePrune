@@ -1,0 +1,164 @@
+[
+    {
+        "dataset": "gqa",
+        "split": "val",
+        "question_id": 16,
+        "image": [
+            "cot/gqa/2376641.jpg",
+            "cot/gqa/2376641.jpg###[117, 361, 285, 482]"
+        ],
+        "conversations": [
+            {
+                "from": "human",
+                "value": "What is the food in the bowl that is to the left of the napkins?"
+            },
+            {
+                "from": "gpt",
+                "value": "[0.234, 0.722, 0.570, 0.964]"
+            },
+            {
+                "from": "human",
+                "value": "<image>"
+            },
+            {
+                "from": "gpt",
+                "value": "cereal"
+            }
+        ]
+    },
+    {
+        "dataset": "gqa",
+        "split": "val",
+        "question_id": 16,
+        "image": [
+            "cot/gqa/2376641.jpg",
+            "cot/gqa/2376641.jpg###[117, 361, 285, 482]"
+        ],
+        "conversations": [
+            {
+                "from": "human",
+                "value": "What is the boy doing?"
+            },
+            {
+                "from": "gpt",
+                "value": "[0.234, 0.722, 0.570, 0.964]"
+            },
+            {
+                "from": "human",
+                "value": "<image>"
+            },
+            {
+                "from": "gpt",
+                "value": "eating"
+            }
+        ]
+    },
+    {
+        "dataset": "gqa",
+        "split": "val",
+        "question_id": 16,
+        "image": [
+            "cot/gqa/2376641.jpg",
+            "cot/gqa/2376641.jpg###[117, 361, 285, 482]"
+        ],
+        "conversations": [
+            {
+                "from": "human",
+                "value": "What is on the spoon?"
+            },
+            {
+                "from": "gpt",
+                "value": "[0.234, 0.722, 0.570, 0.964]"
+            },
+            {
+                "from": "human",
+                "value": "<image>"
+            },
+            {
+                "from": "gpt",
+                "value": "A red cereal and a green cereal"
+            }
+        ]
+    },
+    {
+        "dataset": "gqa",
+        "split": "val",
+        "question_id": 16,
+        "image": [
+            "cot/gqa/2376641.jpg",
+            "cot/gqa/2376641.jpg###[117, 361, 285, 482]"
+        ],
+        "conversations": [
+            {
+                "from": "human",
+                "value": "What is on the boy's left hand?"
+            },
+            {
+                "from": "gpt",
+                "value": "[0.234, 0.722, 0.570, 0.964]"
+            },
+            {
+                "from": "human",
+                "value": "<image>"
+            },
+            {
+                "from": "gpt",
+                "value": "tissue or white towel"
+            }
+        ]
+    },
+    {
+        "dataset": "gqa",
+        "split": "val",
+        "question_id": 16,
+        "image": [
+            "cot/gqa/2376641.jpg",
+            "cot/gqa/2376641.jpg###[117, 361, 285, 482]"
+        ],
+        "conversations": [
+            {
+                "from": "human",
+                "value": "What color is the boy's hair?"
+            },
+            {
+                "from": "gpt",
+                "value": "[0.234, 0.722, 0.570, 0.964]"
+            },
+            {
+                "from": "human",
+                "value": "<image>"
+            },
+            {
+                "from": "gpt",
+                "value": "blonde"
+            }
+        ]
+    },
+    {
+        "dataset": "gqa",
+        "split": "val",
+        "question_id": 16,
+        "image": [
+            "cot/gqa/2376641.jpg",
+            "cot/gqa/2376641.jpg###[117, 361, 285, 482]"
+        ],
+        "conversations": [
+            {
+                "from": "human",
+                "value": "How many flakes of cereal are there on the spoon??"
+            },
+            {
+                "from": "gpt",
+                "value": "[0.234, 0.722, 0.570, 0.964]"
+            },
+            {
+                "from": "human",
+                "value": "<image>"
+            },
+            {
+                "from": "gpt",
+                "value": "two"
+            }
+        ]
+    }
+]

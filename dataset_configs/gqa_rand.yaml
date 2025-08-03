@@ -1,0 +1,10 @@
+datasets:
+  - json_path: viscot_dataset/gqa_cot_train.jsonl
+    sampling_strategy: random:20000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    score_funcs:
+      - llm

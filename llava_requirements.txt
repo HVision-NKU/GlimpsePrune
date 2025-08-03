@@ -1,0 +1,8 @@
+# torch==2.1.2
+transformers==4.37.2
+trl==0.9.6
+# flash-attn==2.7.3
+accelerate==0.21.0
+matplotlib==3.10.3
+wandb==0.19.11
+peft==0.4.0

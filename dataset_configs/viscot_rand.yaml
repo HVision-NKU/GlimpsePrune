@@ -1,0 +1,230 @@
+datasets:
+  - json_path: viscot_dataset/cub_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    score_funcs:
+      - llm
+  - json_path: viscot_dataset/cub_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    prompt: "{}\nAnswer the question using a single word or phrase."
+    score_funcs:
+      - precision_match
+
+  - json_path: viscot_dataset/docvqa_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    score_funcs:
+      - llm
+  - json_path: viscot_dataset/docvqa_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    prompt: "{}\nAnswer the question using a single word or phrase."
+    score_funcs:
+      - precision_match
+
+  - json_path: viscot_dataset/dude_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    score_funcs:
+      - llm
+  - json_path: viscot_dataset/dude_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    prompt: "{}\nAnswer the question using a single word or phrase."
+    score_funcs:
+      - precision_match
+
+  - json_path: viscot_dataset/flickr30k_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    score_funcs:
+      - llm
+
+  - json_path: viscot_dataset/gqa_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    score_funcs:
+      - llm
+  - json_path: viscot_dataset/gqa_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    prompt: "{}\nAnswer the question using a single word or phrase."
+    score_funcs:
+      - precision_match
+
+  - json_path: viscot_dataset/infographicsvqa_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    score_funcs:
+      - llm
+  - json_path: viscot_dataset/infographicsvqa_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    prompt: "{}\nAnswer the question using a single word or phrase."
+    score_funcs:
+      - precision_match
+
+  - json_path: viscot_dataset/openimages_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    score_funcs:
+      - llm
+  - json_path: viscot_dataset/openimages_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    prompt: "{}\nAnswer the question using a single word or phrase."
+    score_funcs:
+      - precision_match
+
+  - json_path: viscot_dataset/sroie_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    score_funcs:
+      - llm
+  - json_path: viscot_dataset/sroie_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    prompt: "{}\nAnswer the question using a single word or phrase."
+    score_funcs:
+      - precision_match
+
+  - json_path: viscot_dataset/textcap_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    score_funcs:
+      - llm
+  - json_path: viscot_dataset/textcap_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    prompt: "{}\nAnswer the question using a single word or phrase."
+    score_funcs:
+      - precision_match
+
+  - json_path: viscot_dataset/textvqa_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    score_funcs:
+      - llm
+  - json_path: viscot_dataset/textvqa_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    prompt: "{}\nAnswer the question using a single word or phrase."
+    score_funcs:
+      - precision_match
+
+  - json_path: viscot_dataset/visual7w_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    score_funcs:
+      - llm
+  - json_path: viscot_dataset/visual7w_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    prompt: "{}\nAnswer the question using a single word or phrase."
+    score_funcs:
+      - precision_match
+
+  - json_path: viscot_dataset/vsr_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    score_funcs:
+      - llm
+  - json_path: viscot_dataset/vsr_cot_train.jsonl
+    sampling_strategy: random:1000
+    sampling_seed: 42
+    mapper: cot_train
+    bbox_type: xyxy
+    additional_mappers:
+      - norm_bboxes
+    prompt: "{}\nAnswer the question using a single word or phrase."
+    score_funcs:
+      - precision_match

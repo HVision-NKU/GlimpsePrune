@@ -1,0 +1,78 @@
+model_name_or_path: liuhaotian/llava-v1.5-7b
+train_dataset: dataset_configs/gqa_rand.yaml
+loc_loss_class: MaskLoss
+loc_dice_weight: 1.0
+loc_bce_weight: 0.1
+loc_weight: 1.0
+le_weight: 1.0
+use_attention_logits: false
+le_layers:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 15
+  - 16
+  - 17
+  - 18
+  - 19
+  - 20
+  - 21
+  - 22
+  - 23
+  - 24
+  - 25
+  - 26
+  - 27
+  - 28
+  - 29
+  - 30
+  - 31
+selected_layers:
+  - 21
+reduce_layer: 21
+
+
+bf16: true
+torch_dtype: bfloat16
+attn_fuse_type: AttnFuserV1
+attn_fuse_size: 256
+visual_cond_size: 512
+attn_fuse_num_heads: 4
+attn_fuse_hidden_act: silu
+ori_attn_supervision: false
+deep_supervision: false
+selected_visual_layers:
+  - 23
+  - 17
+  - 11
+  - 5
+
+
+output_dir: output/llava1_5_7b_gp_0801
+run_name: llava1_5_7b_gp_0801
+
+bf16: true
+torch_dtype: bfloat16
+attn_implementation: flash_attention_2
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 1e-4
+num_train_epochs: 1
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+
+remove_unused_columns: false
+logging_steps: 10
+save_steps: 500

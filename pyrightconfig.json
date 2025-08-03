@@ -1,0 +1,14 @@
+{
+    "exclude": [
+        ".git",
+        "./datas",
+        "**/__pycache__",
+        "./output",
+        "./result",
+        "./viscot_dataset",
+        "./viscot_benchmark",
+        "./checkpoints",
+        "./ckpts",
+        "./wandb",
+    ]
+}
