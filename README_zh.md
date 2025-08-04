@@ -54,7 +54,7 @@
 
 ## 🖼️ 框架概览
 
-GlimpsePrune 的核心思想是引入一个轻量级的“Glimpse Module”，它能根据文本提示快速识别并保留与问题最相关的视觉区域，剪除其余冗余信息。
+GlimpsePrune 的核心思想是引入一个**glimpse token**和一个轻量级的**Visual tokens Important Predictor (VIP)**，它能根据文本提示快速识别并保留与问题最相关的视觉区域，剪除其余冗余信息。
 
 <div align="center">
   <img src="assets/framework.png" width="70%">

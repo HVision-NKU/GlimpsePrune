@@ -54,7 +54,7 @@ For more technical details, please refer to our [paper (coming soon)]().
 
 ## 🖼️ Framework Overview
 
-The core idea of GlimpsePrune is to introduce a lightweight "Glimpse Module" that can quickly identify and retain the visual regions most relevant to the text prompt, pruning the remaining redundant information.
+The core idea of GlimpsePrune is to introduce a **glimpse token** and a lightweight **Visual tokens Important Predictor (VIP)** that can quickly identify and retain the visual regions most relevant to the text prompt, pruning the remaining redundant information.
 
 <div align="center">
   <img src="assets/framework.png" width="70%">
