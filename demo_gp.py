@@ -95,6 +95,7 @@ def stream_chat_gp(image, question, temperature, top_p, max_new_tokens, enable_g
     # Initialize outputs
     generated_text = ""
     log_output = ""
+    image_token_bool_masks = None
     masked_image_result = None
 
     # Check if inputs are valid
@@ -161,12 +162,9 @@ def stream_chat_gp(image, question, temperature, top_p, max_new_tokens, enable_g
                 masked_image_result = apply_mask_on_image(image_pil.copy(), image_token_bool_mask)
             except Exception as e:
                 log_output += f"Error during mask generation: {str(e)}\n"
-                torch.cuda.empty_cache()  # Clear GPU memory in case of error
             finally:
-                image_token_bool_masks = None # Clear mask to free memory
                 torch.cuda.empty_cache()  # Clear GPU memory after mask generation
-        else:
-            image_token_bool_masks = None
+
 
         # --- Text Generation ---
         model.reset_image_tokens_cache()  # Reset cache before generation
@@ -194,18 +192,19 @@ def stream_chat_gp(image, question, temperature, top_p, max_new_tokens, enable_g
         for new_text in streamer:
             generated_text += new_text
             current_log = log_stream.getvalue()
-            yield generated_text, log_output + current_log, masked_image_result
-
+            # yield generated_text, log_output + current_log, masked_image_result  # NOTE: return masked_image_result each time is slow!
+            yield generated_text, log_output + current_log, gr.update()
+            
     except Exception as e:
         tb_str = traceback.format_exc()
-        torch.cuda.empty_cache()  # Clear GPU memory in case of error
         final_log = log_stream.getvalue() + "\n" + tb_str
         yield generated_text, final_log, masked_image_result
     finally:
         sys.stderr = original_stderr
         final_log = log_stream.getvalue()
+        torch.cuda.empty_cache()
         if final_log:
-            yield generated_text, log_output + final_log, masked_image_result
+            yield generated_text, log_output + final_log, gr.update()
 
 # ---------------- Gradio UI Layout ----------------
 
