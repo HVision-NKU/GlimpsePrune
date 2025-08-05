@@ -10,6 +10,7 @@
 <p align="center">
     <a href='https://arxiv.org/pdf/2508.01548'><img src='https://img.shields.io/badge/arXiv-2508.01548-red'></a>
     <a href='https://huggingface.co/collections/ashun989/glimpseprune-688d8826ef5bd09db6af145e'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Models-orange'></a>
+    <a href='https://huggingface.co/papers/2508.01548'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Paper-yellow'></a>
     <a href="https://github.com/HVision-NKU/GlimpsePrune/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
 </p>
 
