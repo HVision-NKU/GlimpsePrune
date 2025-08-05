@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-    <a href=''><img src='https://img.shields.io/badge/arXiv-2508.xxxxx-red'></a>
+    <a href='https://arxiv.org/pdf/2508.01548'><img src='https://img.shields.io/badge/arXiv-2508.01548-red'></a>
     <a href='https://huggingface.co/collections/ashun989/glimpseprune-688d8826ef5bd09db6af145e'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Models-orange'></a>
     <a href="https://github.com/HVision-NKU/GlimpsePrune/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
 </p>
@@ -22,7 +22,7 @@
 
 **GlimpsePrune** 是一个为大型视觉语言模型 (LVLMs) 设计的动态视觉Token剪枝框架。通过在少量数据上进行快速训练（例如，在20K GQA数据上训练**少于1小时**），GlimpsePrune 能够让 Qwen2.5-VL-7B 在生成回答前，平均剪除 **92.6%** 的视觉Token，同时保持与原始模型相当的性能。
 
-更多技术细节，请参阅我们的[论文 (即将发布)]()。
+更多技术细节，请参阅我们的[论文](https://arxiv.org/abs/2508.01548)。
 
 ## 目录
 - [✨ 主要特性](#-主要特性)
@@ -50,6 +50,7 @@
 
 ## 🚀 最新动态
 
+- **`2025.08.05`**: [论文](https://arxiv.org/abs/2508.01548) 已公开发布！
 - **`2025.08.03`**: [代码](https://github.com/HVision-NKU/GlimpsePrune) 和 [模型](https://huggingface.co/collections/ashun989/glimpseprune-688d8826ef5bd09db6af145e) 已公开发布！
 
 ## 🖼️ 框架概览
@@ -237,7 +238,15 @@ bash scripts/train_qwen_gp_plus.sh
 
 如果我们的工作对您有所帮助，请考虑引用我们的论文：
 ```bibtex
-TBD
+@misc{zeng2025glimpsecompressdynamicvisual,
+      title={A Glimpse to Compress: Dynamic Visual Token Pruning for Large Vision-Language Models}, 
+      author={Quan-Sheng Zeng and Yunheng Li and Qilong Wang and Peng-Tao Jiang and Zuxuan Wu and Ming-Ming Cheng and Qibin Hou},
+      year={2025},
+      eprint={2508.01548},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2508.01548}, 
+}
 ```
 
 ## 📧 联系我们

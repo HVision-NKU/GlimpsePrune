@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-    <a href=''><img src='https://img.shields.io/badge/arXiv-2508.xxxxx-red'></a>
+    <a href='https://arxiv.org/pdf/2508.01548'><img src='https://img.shields.io/badge/arXiv-2508.01548-red'></a>
     <a href='https://huggingface.co/collections/ashun989/glimpseprune-688d8826ef5bd09db6af145e'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Models-orange'></a>
     <a href="https://github.com/HVision-NKU/GlimpsePrune/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
 </p>
@@ -22,7 +22,7 @@
 
 **GlimpsePrune** is a dynamic visual token pruning framework designed for Large Vision-Language Models (LVLMs). Through fast training on a small amount of data (e.g., **less than 1 hour** on 20K GQA data), GlimpsePrune enables Qwen2.5-VL-7B to prune an average of **92.6%** of visual tokens before generating a response, while maintaining performance comparable to the original model.
 
-For more technical details, please refer to our [paper (coming soon)]().
+For more technical details, please refer to our [paper](https://arxiv.org/abs/2508.01548).
 
 ## Table of Contents
 - [✨ Key Features](#-key-features)
@@ -50,6 +50,7 @@ For more technical details, please refer to our [paper (coming soon)]().
 
 ## 🚀 News
 
+- **`2025.08.05`**: [Paper](https://arxiv.org/abs/2508.01548) are publicly released!
 - **`2025.08.03`**: [Code](https://github.com/HVision-NKU/GlimpsePrune) and [Models](https://huggingface.co/collections/ashun989/glimpseprune-688d8826ef5bd09db6af145e) are publicly released!
 
 ## 🖼️ Framework Overview
@@ -235,7 +236,15 @@ This project is based on the following excellent open-source work, and we expres
 
 If you find our work helpful, please consider citing our paper:
 ```bibtex
-TBD
+@misc{zeng2025glimpseprune,
+      title={A Glimpse to Compress: Dynamic Visual Token Pruning for Large Vision-Language Models}, 
+      author={Quan-Sheng Zeng and Yunheng Li and Qilong Wang and Peng-Tao Jiang and Zuxuan Wu and Ming-Ming Cheng and Qibin Hou},
+      year={2025},
+      eprint={2508.01548},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2508.01548}, 
+}
 ```
 
 ## 📧 Contact Us
