@@ -9,6 +9,33 @@ from transformers.tokenization_utils_base import PreTokenizedInput, TextInput
 from transformers.models.qwen2_5_vl.processing_qwen2_5_vl import Qwen2_5_VLProcessor, Qwen2_5_VLProcessorKwargs
 
 
+def find_indices_of_bbox_on_grid(bboxes, grid):
+    """
+    Find the index of the bbox in the flatten grid.
+    Args:
+        bboxes: List[List[float]], N normed bbox, [0,1], xyxy
+        grid: List[int], the grid size, [H, W]
+    Return:
+        flatten index
+    """
+    indices = []
+    H, W = grid
+    record = [False] * (H * W)
+    for bbox in bboxes:
+        x1, y1, x2, y2 = bbox
+        x1_grid = int(x1 * W)
+        y1_grid = int(y1 * H)
+        x2_grid = min(int(x2 * W), W - 1)
+        y2_grid = min(int(y2 * H), H - 1)
+        for i in range(y1_grid, y2_grid + 1):
+            for j in range(x1_grid, x2_grid + 1):
+                idx = i * W + j
+                if not record[idx]:
+                    record[idx] = True
+                    indices.append(i * W + j)
+    return indices
+
+
 def get_ref_token_mask(normed_bboxes, grid_size):
     """
     Find the index of the bbox in the flatten grid.

@@ -8,7 +8,7 @@ import argparse
 from PIL import Image
 from tqdm import tqdm
 from datasets import load_dataset
-from my_transformers.models.qwen2_5_vl.processing import find_indices_of_bbox_on_grid
+from transformers_gp.models.qwen2_5_vl.process_gp import find_indices_of_bbox_on_grid
 from transformers.models.qwen2_vl.image_processing_qwen2_vl import smart_resize
 
 MAPPERS = {}

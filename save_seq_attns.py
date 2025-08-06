@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.cm as cm
 from qwen_vl_utils import process_vision_info
 
-from my_transformers.models.qwen2_5_vl import Qwen2_5_VLForConditionalGeneration_Sep
+from transformers_gp.models.qwen2_5_vl import Qwen2_5_VLForConditionalGeneration_Sep
 from transformers.models.qwen2_5_vl import Qwen2_5_VLProcessor
 
 COT_BRIEF_PROMPT = "{}\nAnswer the question using a single word or phrase."

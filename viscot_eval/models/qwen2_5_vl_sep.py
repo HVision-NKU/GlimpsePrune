@@ -4,7 +4,7 @@ from qwen_vl_utils import process_vision_info
 from transformers.models.qwen2_5_vl import (
     Qwen2_5_VLProcessor,
 )
-from my_transformers.models.qwen2_5_vl import (
+from transformers_gp.models.qwen2_5_vl import (
         Qwen2_5_VLForConditionalGeneration_Sep,
     )
 
