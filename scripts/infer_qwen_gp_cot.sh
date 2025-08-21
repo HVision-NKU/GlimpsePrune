@@ -117,11 +117,6 @@ if [[ -n "$max_remain_ratio" ]]; then
     PATH_SUFFIX="${PATH_SUFFIX}_max_${max_remain_ratio}"
 fi
 
-if [[ $vip_use_fa -eq 1 ]]; then
-    MORE_ARGS="${MORE_ARGS} --attn_fuse_use_flash_attn True"
-    PATH_SUFFIX="${PATH_SUFFIX}_vip-fa"
-fi
-
 if [[ $num_samples -ne 0 ]]; then
     MORE_ARGS="${MORE_ARGS} --num_samples ${num_samples}"
 fi
