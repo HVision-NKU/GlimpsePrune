@@ -149,6 +149,10 @@ class ScriptArgs:
         default=None,
         metadata={"help": "Maximum ratio of visual tokens to remain after reduction. If None, use the default behavior."}
     )
+    attn_fuse_use_flash_attn: Optional[bool] = field(
+        default=None,
+        metadata={"help": "Whether to use flash attention for attention fusion. If None, use the default behavior."}
+    )
     do_func_name: Literal["generate", "glimpse"] = field(
         default="generate",
         metadata={"help": "Function to use for processing."}

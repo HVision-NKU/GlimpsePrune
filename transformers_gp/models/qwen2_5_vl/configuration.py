@@ -35,6 +35,7 @@ class Qwen2_5_VL_GPConfig(Qwen2_5_VLConfig):
         attn_fuse_num_heads=4,
         attn_fuse_hidden_act="silu",
         attn_fuse_global=False,
+        attn_fuse_use_flash_attn=False,
         ori_attn_supervision=True,
         deep_supervision=True,
         le_layers=(0,),
@@ -81,6 +82,7 @@ class Qwen2_5_VL_GPConfig(Qwen2_5_VLConfig):
         self.visual_cond_size = visual_cond_size
         self.attn_fuse_num_heads = attn_fuse_num_heads
         self.attn_fuse_hidden_act = attn_fuse_hidden_act
+        self.attn_fuse_use_flash_attn = attn_fuse_use_flash_attn
         self.ori_attn_supervision = ori_attn_supervision
         self.deep_supervision = deep_supervision
         self.le_layers = le_layers

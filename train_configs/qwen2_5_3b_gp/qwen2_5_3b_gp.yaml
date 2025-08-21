@@ -57,6 +57,7 @@ attn_fuse_size: 256
 visual_cond_size: 512
 attn_fuse_num_heads: 4
 attn_fuse_hidden_act: silu
+attn_fuse_use_flash_attn: true
 ori_attn_supervision: false
 deep_supervision: false
 attn_fuse_global: true

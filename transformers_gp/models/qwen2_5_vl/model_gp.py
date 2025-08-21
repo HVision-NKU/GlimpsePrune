@@ -23,7 +23,7 @@ from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import (
 )
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLForConditionalGeneration,
-    Qwen2_5_VisionTransformerPretrainedModel,    
+    Qwen2_5_VisionTransformerPretrainedModel,
     Qwen2_5_VLPreTrainedModel,
     Qwen2_5_VLModel,
     Qwen2_5_VisionTransformerPretrainedModel,
@@ -38,11 +38,13 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     repeat_kv,
     apply_multimodal_rotary_pos_emb,
     apply_rotary_pos_emb_vision,
+    apply_rotary_pos_emb_flashatt,
 )
 from transformers.activations import ACT2FN
 
 from transformers.modeling_flash_attention_utils import (
-    _flash_attention_forward
+    _flash_attention_forward,
+    flash_attn_varlen_func,
 )
     
 from .configuration import *
@@ -137,29 +139,97 @@ class CondSdpaAttention(nn.Module):
         cos, sin = position_embeddings
         q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
         
-        attention_mask = torch.zeros([1, seq_length, seq_length], device=q.device, dtype=torch.bool)
-        for i in range(1, len(cu_seqlens)):
-            attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = True
+        # attention_mask = torch.zeros([1, seq_length, seq_length], device=q.device, dtype=torch.bool)
+        # for i in range(1, len(cu_seqlens)):
+        #     attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = True
         
-        q = q.transpose(0, 1)
-        k = k.transpose(0, 1)
-        v = v.transpose(0, 1)
-        attn_output = F.scaled_dot_product_attention(
-            q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0), attention_mask, dropout_p=0.0
-        )
+        # q = q.transpose(0, 1)
+        # k = k.transpose(0, 1)
+        # v = v.transpose(0, 1)
+        # attn_output = F.scaled_dot_product_attention(
+        #     q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0), attention_mask, dropout_p=0.0
+        # )
         
-        attn_output = attn_output.squeeze(0).transpose(0, 1)
-        attn_output = attn_output.reshape(seq_length, -1)
+        # attn_output = attn_output.squeeze(0).transpose(0, 1)
+        # attn_output = attn_output.reshape(seq_length, -1)
+        # attn_output = self.o_proj(attn_output)
+        
+        # Better impl according to: https://github.com/huggingface/transformers/pull/37363
+        q = q.transpose(0, 1).unsqueeze(0)  # [1, num_heads, seq_length, head_dim]
+        k = k.transpose(0, 1).unsqueeze(0)  # [1, num_heads, seq_length, head_dim]
+        v = v.transpose(0, 1).unsqueeze(0)  # [1, num_heads, seq_length, head_dim]
+        lengths = cu_seqlens[1:] - cu_seqlens[:-1]
+        splits = [
+            torch.split(tensor, lengths.tolist(), dim=2) for tensor in (q, k, v)
+        ]
+        attn_outputs = [
+            F.scaled_dot_product_attention(
+                q_split, k_split, v_split, None, dropout_p=0.0, 
+            )[0] for q_split, k_split, v_split in zip(*splits)
+        ]
+        attn_output = torch.cat(attn_outputs, dim=1)  # [num_heads, seq_length, head_dim]
+        attn_output = attn_output.transpose(0, 1).reshape(seq_length, -1)
         attn_output = self.o_proj(attn_output)
         return attn_output
     
-
+    
+class CondFA2Attention(nn.Module):
+    def __init__(self, hidden_size, cond_size, num_heads):
+        super().__init__()
+        qk_size = hidden_size + cond_size
+        v_size = hidden_size
+        self.q_proj = nn.Linear(qk_size, qk_size, bias=False)
+        self.k_proj = nn.Linear(qk_size, qk_size, bias=False)
+        self.v_proj = nn.Linear(v_size, v_size, bias=False)
+        self.o_proj = nn.Linear(v_size, v_size, bias=False)
+        self.num_heads = num_heads
+        # https://github.com/Dao-AILab/flash-attention/pull/1166
+        # Since the feature of 'qk dim different from v dim' is not merged in FA2,
+        # we need to append a dummy value state.
+        if cond_size > 0:
+            self.register_buffer(
+                "dummy_value", torch.ones(1, cond_size), persistent=False
+            )
+            
+    def forward(self, hidden_states, cond_states, cu_seqlens, position_embeddings):
+        seq_length = hidden_states.shape[0]
+        if cond_states is not None:
+            
+            qk = torch.cat([hidden_states, cond_states], dim=-1)
+            cond_size = cond_states.shape[-1]
+        else:
+            qk = hidden_states
+            cond_size = 0
+        q = self.q_proj(qk).reshape(seq_length, self.num_heads, -1)
+        k = self.k_proj(qk).reshape(seq_length, self.num_heads, -1)
+        v = self.v_proj(hidden_states)
+        if cond_size > 0:
+            v = torch.cat([v, self.dummy_value.expand(seq_length, -1)], dim=1)
+        v = v.reshape(seq_length, self.num_heads, -1)            
+        cos, sin = position_embeddings
+        q, k = apply_rotary_pos_emb_flashatt(q.unsqueeze(0), k.unsqueeze(0), cos, sin)
+        q = q.squeeze(0)
+        k = k.squeeze(0)
+        max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
+        attn_output = flash_attn_varlen_func(q, k, v, cu_seqlens, cu_seqlens, max_seqlen, max_seqlen).reshape(
+            seq_length, -1
+        )
+        if cond_size > 0:
+            attn_output = attn_output[..., :-cond_size]
+        attn_output = self.o_proj(attn_output)
+        return attn_output
+        
+        
+        
 class AttnFuserLayer(nn.Module):
-    def __init__(self, hidden_size, cond_size, num_heads, hidden_act):
+    def __init__(self, hidden_size, cond_size, num_heads, hidden_act, use_flash_attn):
         super().__init__()
         self.norm1 = Qwen2RMSNorm(hidden_size, eps=1e-6)
         self.norm2 = Qwen2RMSNorm(hidden_size, eps=1e-6)
-        self.attn = CondSdpaAttention(hidden_size, cond_size, num_heads)
+        if use_flash_attn:
+            self.attn = CondFA2Attention(hidden_size, cond_size, num_heads)
+        else:
+            self.attn = CondSdpaAttention(hidden_size, cond_size, num_heads)
         self.mlp = MLP(hidden_size, hidden_size * 2, hidden_act, bias=True)
         
     def forward(
@@ -225,7 +295,7 @@ class AttnFuserV1(BaseAttnFuser):
         for i in range(num_layers):
             self.cond_in_projs.append(nn.Linear(config.vision_config.hidden_size, visual_cond_size))
             self.layers.append(AttnFuserLayer(
-                attn_fuse_size, visual_cond_size, config.attn_fuse_num_heads, config.attn_fuse_hidden_act
+                attn_fuse_size, visual_cond_size, config.attn_fuse_num_heads, config.attn_fuse_hidden_act, config.attn_fuse_use_flash_attn
             ))
             if not self.config.deep_supervision and i < num_layers - 1:
                 self.attn_out_projs.append(nn.Identity())

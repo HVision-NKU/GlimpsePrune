@@ -21,6 +21,7 @@ class Qwen2_5_VL_GP(BaseInferModel):
                     anchor_positions=None,
                     min_remain_num=None,
                     max_remain_ratio=None,
+                    attn_fuse_use_flash_attn=None,
                     adapter_dir=None,
                     adapter_merge=False,
                     new_modules_config=None,
@@ -57,6 +58,8 @@ class Qwen2_5_VL_GP(BaseInferModel):
             model.config.min_remain_num = min_remain_num
         if max_remain_ratio is not None:
             model.config.max_remain_ratio = max_remain_ratio
+        if attn_fuse_use_flash_attn is not None:
+            model.config.attn_fuse_use_flash_attn = attn_fuse_use_flash_attn
         
         if adapter_dir is not None:
             model = PeftModel.from_pretrained(model, adapter_dir, is_trainable=False)
