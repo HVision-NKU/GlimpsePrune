@@ -57,7 +57,7 @@ class Qwen2_5_VL_GP(BaseInferModel):
             model.config.min_remain_num = min_remain_num
         if max_remain_ratio is not None:
             model.config.max_remain_ratio = max_remain_ratio
-        
+
         if adapter_dir is not None:
             model = PeftModel.from_pretrained(model, adapter_dir, is_trainable=False)
             if adapter_merge:

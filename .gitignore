@@ -2,6 +2,7 @@ infer_v9.py
 slurm_*.sh
 slurm-*.out
 .nfs*
+/tests
 
 /datas
 /Qwen

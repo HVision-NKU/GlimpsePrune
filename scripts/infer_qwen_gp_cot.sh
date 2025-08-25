@@ -20,6 +20,7 @@ port=${PORT:-12345}
 base_model=${BASE_MODEL:-'Qwen/Qwen2.5-VL-3B-Instruct'}
 min_remain_num=${MIN_REMAIN_NUM:-0}
 max_remain_ratio=${MAX_REMAIN_RATIO:-""}
+vip_use_fa=${VIP_USE_FA:-0}
 num_samples=${NUM_SAMPLES:-0}
 time_logger=${TIME_LOGGER:-0}
 memory_logger=${MEMORY_LOGGER:-0}
@@ -115,7 +116,6 @@ if [[ -n "$max_remain_ratio" ]]; then
     MORE_ARGS="${MORE_ARGS} --max_remain_ratio ${max_remain_ratio}"
     PATH_SUFFIX="${PATH_SUFFIX}_max_${max_remain_ratio}"
 fi
-
 
 if [[ $num_samples -ne 0 ]]; then
     MORE_ARGS="${MORE_ARGS} --num_samples ${num_samples}"
