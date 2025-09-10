@@ -38,8 +38,8 @@ from llava.model.llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
 from llava.constants import (
     IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IM_START_TOKEN
 )
-from warppers import time_logger
-from utils import download_model_from_hf
+from utils.warppers import time_logger
+from utils.download import download_model_from_hf
 
 logger = logging.get_logger(__name__)
 
@@ -1656,20 +1656,20 @@ class LlavaLlamaForCausalLM_GP(LlamaForCausalLM, LlavaMetaForCausalLM):
                     use_cache: Optional[bool] = None,
                     output_attentions: Optional[bool] = None,
                     output_hidden_states: Optional[bool] = None,
-                    return_dict: Optional[bool] = None,
-                    cache_position: Optional[torch.LongTensor] = None):
-        return self.llm_forward(
-            input_ids=input_ids,
-            position_ids=position_ids,
+                    return_dict: Optional[bool] = None):
+        outputs = self.model(
+            input_ids=input_ids if inputs_embeds is None else None,
             attention_mask=attention_mask,
+            position_ids=position_ids,
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-            cache_position=cache_position,
         )
+        hidden_states = outputs[0]
+        return self.lm_head(hidden_states), outputs
 
     def forward(
         self,
@@ -1749,7 +1749,14 @@ class LlavaLlamaForCausalLM_GP(LlamaForCausalLM, LlavaMetaForCausalLM):
                 use_cache=use_cache,
             )
         
-        if past_key_values is None or past_key_values.get_seq_length() == 0:
+        past_seq_length = 0
+        if past_key_values is not None:
+            if isinstance(past_key_values, Cache):
+                past_seq_length = past_key_values.get_seq_length()
+            else:
+                past_seq_length = past_key_values[0][0].shape[2]
+            
+        if past_seq_length == 0:
             logits, outputs = self.llm_forward_prefilling(
                 input_ids=input_ids,
                 attention_mask=attention_mask,

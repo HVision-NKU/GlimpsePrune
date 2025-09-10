@@ -44,7 +44,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.utils import logging
 
 from .model_gp import convert_2d_to_4d_mask
-from warppers import time_logger
+from utils.warppers import time_logger
 
 logger = logging.get_logger(__name__)
 

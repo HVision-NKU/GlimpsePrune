@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from accelerate.utils import set_seed
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from vllm import LLM, SamplingParams
-from utils import extract_one_bbox_from_str, cal_paired_ious
+from utils.utils import extract_one_bbox_from_str, cal_paired_ious
 
 SYS_PROMPT = """
 You are responsible for proofreading the answers, you need to give a score to the model's answer by referring to the standard answer, based on the given question. The full score is 1 point and the minimum score is 0 points. Please output the score in the form "score: <score>". The evaluation criteria require that the closer the model's answer is to the standard answer, the higher the score.

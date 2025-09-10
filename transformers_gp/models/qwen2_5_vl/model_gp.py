@@ -49,8 +49,8 @@ from transformers.modeling_flash_attention_utils import (
     
 from .configuration import *
 from transformers.modeling_outputs import ModelOutput   
-from warppers import debug_calls, time_logger
-from utils import download_model_from_hf
+from utils.warppers import debug_calls, time_logger
+from utils.download import download_model_from_hf
 
 logger = logging.get_logger(__name__)
 

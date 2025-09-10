@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-    <a href='https://arxiv.org/pdf/2508.01548'><img src='https://img.shields.io/badge/arXiv-2508.01548-red'></a>
+    <a href='https://arxiv.org/abs/2508.01548'><img src='https://img.shields.io/badge/arXiv-2508.01548-red'></a>
     <a href='https://huggingface.co/collections/ashun989/glimpseprune-688d8826ef5bd09db6af145e'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Models-orange'></a>
     <a href='https://huggingface.co/papers/2508.01548'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Paper-yellow'></a>
     <a href="https://github.com/HVision-NKU/GlimpsePrune/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
@@ -24,6 +24,9 @@
 **GlimpsePrune** is a dynamic visual token pruning framework designed for Large Vision-Language Models (LVLMs). Through fast training on a small amount of data (e.g., **less than 1 hour** on 20K GQA data), GlimpsePrune enables Qwen2.5-VL-7B to prune an average of **92.6%** of visual tokens before generating a response, while maintaining performance comparable to the original model.
 
 For more technical details, please refer to our [paper](https://arxiv.org/abs/2508.01548).
+
+**If you find our work inspiring or helpful, please give us a star ⭐. Thank you for your attention and support:**
+[![Stargazers repo roster for @HVision-NKU/GlimpsePrune](https://reporoster.com/stars/HVision-NKU/GlimpsePrune)](https://github.com/HVision-NKU/GlimpsePrune/stargazers)
 
 ## Table of Contents
 - [✨ Key Features](#-key-features)
@@ -177,7 +180,8 @@ python demo_gp.py \
 
 ### Inference
 For a detailed example of how to load the model and perform inference, please refer to the Jupyter Notebook:
-➡️ [**`notebook/gp_tutorial.ipynb`**](notebook/gp_tutorial.ipynb)
+➡️ [**`notebook/gp_qwen_tutorial.ipynb`**](notebook/gp_qwen_tutorial.ipynb)
+
 
 ### Evaluation
 We provide convenient evaluation scripts.
@@ -185,19 +189,19 @@ We provide convenient evaluation scripts.
 #### Free-form VQA
 ```bash
 # Default settings (no retention rate limit)
-BASE_MODEL=<base_model> bash infer_qwen_gp_cot.sh <new_modules_dir>
+BASE_MODEL=<base_model> bash scripts/infer_qwen_gp_cot.sh <new_modules_dir>
 
 # Set a maximum retention rate (e.g., 11.1%)
-BASE_MODEL=<base_model> MAX_REMAIN_RATIO=0.111 bash infer_qwen_gp_cot.sh <new_modules_dir>
+BASE_MODEL=<base_model> MAX_REMAIN_RATIO=0.111 bash scripts/infer_qwen_gp_cot.sh <new_modules_dir>
 ```
 
 #### Short-form VQA
 ```bash
 # Default settings
-BASE_MODEL=<base_model> bash eval_qwen_gp.sh <new_modules_dir>
+BASE_MODEL=<base_model> bash scripts/eval_qwen_gp.sh <new_modules_dir>
 
 # Set a maximum retention rate
-BASE_MODEL=<base_model> MAX_REMAIN_RATIO=0.111 bash eval_qwen_gp.sh <new_modules_dir>
+BASE_MODEL=<base_model> MAX_REMAIN_RATIO=0.111 bash scripts/eval_qwen_gp.sh <new_modules_dir>
 ```
 
 ### Training
@@ -232,6 +236,7 @@ This project is based on the following excellent open-source work, and we expres
 - [Qwen2.5-VL](https://github.com/QwenLM/Qwen2.5-VL) / [LLaVA](https://github.com/haotian-liu/LLaVA): Powerful Large Vision-Language Models.
 - [Visual-CoT](https://github.com/deepcs233/Visual-CoT): A VQA dataset with rich domains, diverse object sizes, and bounding box annotations.
 - [PyramidDrop](https://github.com/Cooperx521/PyramidDrop), [VisionZip](https://github.com/dvlab-research/VisionZip), [DivPrune](https://github.com/vbdi/divprune), [CDPruner](https://github.com/Theia-4869/CDPruner), [VScan](https://github.com/Tencent/SelfEvolvingAgent/tree/main/VScan): Other exploratory works in the field of visual token compression.
+- [lmms_eval](https://github.com/EvolvingLMMs-Lab/lmms-eval): A evaluation toolkit of large multimodal models.
 
 ## 🖊️ Citation
 

@@ -2,7 +2,7 @@ import os
 import time
 import threading
 import queue
-from utils import LLMClient
+from utils.client import LLMClient
 
 # ===============================================================
 # 2. 性能测试逻辑

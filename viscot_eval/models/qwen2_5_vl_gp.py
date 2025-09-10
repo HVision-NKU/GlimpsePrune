@@ -9,7 +9,7 @@ from transformers_gp.models.qwen2_5_vl import (
 )
 
 from .base import BaseInferModel
-from warppers import time_logger_disabled
+from utils.warppers import time_logger_disabled
 
 
 class Qwen2_5_VL_GP(BaseInferModel):

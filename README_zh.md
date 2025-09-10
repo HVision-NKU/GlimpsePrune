@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-    <a href='https://arxiv.org/pdf/2508.01548'><img src='https://img.shields.io/badge/arXiv-2508.01548-red'></a>
+    <a href='https://arxiv.org/abs/2508.01548'><img src='https://img.shields.io/badge/arXiv-2508.01548-red'></a>
     <a href='https://huggingface.co/collections/ashun989/glimpseprune-688d8826ef5bd09db6af145e'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Models-orange'></a>
     <a href='https://huggingface.co/papers/2508.01548'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Paper-yellow'></a>
     <a href="https://github.com/HVision-NKU/GlimpsePrune/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
@@ -24,6 +24,9 @@
 **GlimpsePrune** 是一个为大型视觉语言模型 (LVLMs) 设计的动态视觉Token剪枝框架。通过在少量数据上进行快速训练（例如，在20K GQA数据上训练**少于1小时**），GlimpsePrune 能够让 Qwen2.5-VL-7B 在生成回答前，平均剪除 **92.6%** 的视觉Token，同时保持与原始模型相当的性能。
 
 更多技术细节，请参阅我们的[论文](https://arxiv.org/abs/2508.01548)。
+
+**如果我们的对您有启发或者有帮助，请给我们一个star ⭐. 感谢你们的关注与支持：**
+[![Stargazers repo roster for @HVision-NKU/GlimpsePrune](https://reporoster.com/stars/HVision-NKU/GlimpsePrune)](https://github.com/HVision-NKU/GlimpsePrune/stargazers)
 
 ## 目录
 - [✨ 主要特性](#-主要特性)
@@ -179,7 +182,7 @@ python demo_gp.py \
 
 ### 推理
 关于如何加载模型并进行推理的详细示例，请参考Jupyter Notebook:
-➡️ [**`notebook/gp_tutorial.ipynb`**](notebook/gp_tutorial.ipynb)
+➡️ [**`notebook/gp_qwen_tutorial.ipynb`**](notebook/gp_qwen_tutorial.ipynb)
 
 ### 评估
 我们提供了便捷的评估脚本。
@@ -187,19 +190,19 @@ python demo_gp.py \
 #### Free-form VQA (长文本问答)
 ```bash
 # 默认设置 (无保留率限制)
-BASE_MODEL=<base_model> bash infer_qwen_gp_cot.sh <new_modules_dir>
+BASE_MODEL=<base_model> bash scripts/infer_qwen_gp_cot.sh <new_modules_dir>
 
 # 设置最大保留率 (例如 11.1%)
-BASE_MODEL=<base_model> MAX_REMAIN_RATIO=0.111 bash infer_qwen_gp_cot.sh <new_modules_dir>
+BASE_MODEL=<base_model> MAX_REMAIN_RATIO=0.111 bash scripts/infer_qwen_gp_cot.sh <new_modules_dir>
 ```
 
 #### Short-form VQA (短文本问答)
 ```bash
 # 默认设置
-BASE_MODEL=<base_model> bash eval_qwen_gp.sh <new_modules_dir>
+BASE_MODEL=<base_model> bash scripts/eval_qwen_gp.sh <new_modules_dir>
 
 # 设置最大保留率
-BASE_MODEL=<base_model> MAX_REMAIN_RATIO=0.111 bash eval_qwen_gp.sh <new_modules_dir>
+BASE_MODEL=<base_model> MAX_REMAIN_RATIO=0.111 bash scripts/eval_qwen_gp.sh <new_modules_dir>
 ```
 
 ### 训练
@@ -234,6 +237,7 @@ bash scripts/train_qwen_gp_plus.sh
 - [Qwen2.5-VL](https://github.com/QwenLM/Qwen2.5-VL) / [LLaVA](https://github.com/haotian-liu/LLaVA): 强大的大型视觉语言模型。
 - [Visual-CoT](https://github.com/deepcs233/Visual-CoT): 领域丰富、目标尺寸丰富、有box标注的 VQA 数据集。
 - [PyramidDrop](https://github.com/Cooperx521/PyramidDrop), [VisionZip](https://github.com/dvlab-research/VisionZip), [DivPrune](https://github.com/vbdi/divprune), [CDPruner](https://github.com/Theia-4869/CDPruner), [VScan](https://github.com/Tencent/SelfEvolvingAgent/tree/main/VScan): 其他视觉Token压缩领域的探索工作。
+- [lmms_eval](https://github.com/EvolvingLMMs-Lab/lmms-eval): 多模态大模型的评测工具包。
 
 ## 🖊️ 引用
 

@@ -27,7 +27,7 @@ from qwen_vscan.model.qwen2_5_vl_custom import (
 
 
 from .base import BaseInferModel
-from warppers import time_logger
+from utils.warppers import time_logger
 
 
 class Qwen2_5_VL_VScan(BaseInferModel):

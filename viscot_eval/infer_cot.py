@@ -15,7 +15,7 @@ from transformers import HfArgumentParser, GenerationConfig
 from PIL import Image
 from accelerate.utils import set_seed
 
-from warppers import (
+from utils.warppers import (
     time_logger_set_active,
     memory_logger_set_active,
     get_all_time_logger_stats,
