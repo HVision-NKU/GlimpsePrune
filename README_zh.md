@@ -25,7 +25,7 @@
 
 更多技术细节，请参阅我们的[论文](https://arxiv.org/abs/2508.01548)。
 
-**如果我们的对您有启发或者有帮助，请给我们一个star ⭐. 感谢你们的关注与支持：**
+**如果我们的工作对您有启发或者有帮助，请给我们一个star ⭐. 感谢你们的关注与支持：**
 <p align="center">
 <a href="https://github.com/HVision-NKU/GlimpsePrune/stargazers">
     <img src="https://reporoster.com/stars/HVision-NKU/GlimpsePrune" alt="Stargazers repo roster for @HVision-NKU/GlimpsePrune" width="80%">
