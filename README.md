@@ -26,7 +26,12 @@
 For more technical details, please refer to our [paper](https://arxiv.org/abs/2508.01548).
 
 **If you find our work inspiring or helpful, please give us a star ⭐. Thank you for your attention and support:**
-[![Stargazers repo roster for @HVision-NKU/GlimpsePrune](https://reporoster.com/stars/HVision-NKU/GlimpsePrune)](https://github.com/HVision-NKU/GlimpsePrune/stargazers)
+<p align="center">
+<a href="https://github.com/HVision-NKU/GlimpsePrune/stargazers">
+    <img src="https://reporoster.com/stars/HVision-NKU/GlimpsePrune" alt="Stargazers repo roster for @HVision-NKU/GlimpsePrune" width="80%">
+</a>
+</p>
+
 
 ## Table of Contents
 - [✨ Key Features](#-key-features)
