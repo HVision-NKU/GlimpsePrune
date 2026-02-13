@@ -15,6 +15,7 @@ from accelerate.utils import set_seed
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from vllm import LLM, SamplingParams
 from utils.utils import extract_one_bbox_from_str, cal_paired_ious
+from viscot_eval.infer_cot import CHOICE_BRIEF_PROMPT
 
 SYS_PROMPT = """
 You are responsible for proofreading the answers, you need to give a score to the model's answer by referring to the standard answer, based on the given question. The full score is 1 point and the minimum score is 0 points. Please output the score in the form "score: <score>". The evaluation criteria require that the closer the model's answer is to the standard answer, the higher the score.
@@ -153,11 +154,26 @@ def cot_train_dataset_mapper(one_data, args):
     
 @register_score_mappers()
 def vstar_bench_dataset_mapper(one_data, args):
-    user_query = one_data['text']
+    user_query = one_data['question']
     pred_resp = one_data['response']
-    gt_resp = one_data['label']
+    option_list = one_data['options']
+    gt_option = one_data['label']  # A, B, C, ...
+    gt_resp = option_list[ord(gt_option) - ord('A')]
     one_data['user_query'] = user_query
     one_data['gt_resp'] = gt_resp
+    one_data['pred_resp'] = pred_resp
+    return one_data
+
+@register_score_mappers()
+def vstar_bench_brief_dataset_mapper(one_data, args):
+    user_query = one_data['question']
+    pred_resp = one_data['response']
+    option_list = one_data['options']
+    option_str = "\n".join([f"{chr(ord('A') + i)}. {option}" for i, option in enumerate(option_list)])
+    user_query = f"{user_query}\n{option_str}\n{CHOICE_BRIEF_PROMPT}"
+    gt_option = one_data['label']  # A, B, C, ...
+    one_data['user_query'] = user_query
+    one_data['gt_resp'] = gt_option
     one_data['pred_resp'] = pred_resp
     return one_data
     
@@ -673,7 +689,10 @@ def main():
             dataset = load_dataset("json", data_files=result_jsonl, split=args.split, streaming=True)
             
             if "vstar" in result_jsonl:
-                mapper_name = 'vstar_bench'
+                if "brief" in result_jsonl:
+                    mapper_name = 'vstar_bench_brief'
+                else:
+                    mapper_name = 'vstar_bench'
             else:
                 mapper_name = args.mapper
             

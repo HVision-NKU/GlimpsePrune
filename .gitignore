@@ -1,12 +1,14 @@
-infer_v9.py
+.sii
+.codex
+qz_*.sh
 slurm_*.sh
 slurm-*.out
+batchscript-*
+phoenix-slurm-*.out
 .nfs*
-/tests
-
-/datas
-/Qwen
-/result
+tests
+datas
+result
 
 .vscode
 .gradio

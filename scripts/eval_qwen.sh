@@ -14,6 +14,7 @@ base_model_suffix=$(basename $base_model)
 base_output_path=${BASE_OUTPUT_PATH:-"result/${base_model_suffix}/lmms_eval"}
 port=${PORT:-29500}
 attn_implementation=${ATTN_IMPL:-"flash_attention_2"}
+batch_size=${BATCH_SIZE:-1}
 
 
 eval_list=( \
@@ -29,7 +30,18 @@ eval_list=( \
 "vstar_bench" \
 )
 
-for task in ${eval_list[@]}
+tasks_override=${TASKS:-""}
+if [[ -n "$tasks_override" ]]; then
+    tasks_override=${tasks_override//,/ }
+    read -ra eval_list <<< "$tasks_override"
+fi
+
+if [[ ${#eval_list[@]} -eq 0 ]]; then
+    echo "Error: task list is empty."
+    exit 1
+fi
+
+for task in "${eval_list[@]}"
 do
     output_path=${base_output_path}/${task}
 
@@ -43,12 +55,10 @@ do
         --model qwen2_5_vl \
         --model_args=pretrained=${base_model},attn_implementation=${attn_implementation} \
         --tasks $task \
-        --batch_size 1 \
+        --batch_size $batch_size \
         --output_path $output_path \
         --log_samples
 done
-
-
 
 
 

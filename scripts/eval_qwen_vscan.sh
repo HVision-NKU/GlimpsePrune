@@ -18,6 +18,9 @@ base_output_path="result/vscan_${base_model_suffix}"
 echo "Base output path: $base_output_path"
 
 port=${PORT:-29500}
+batch_size=${BATCH_SIZE:-1}
+max_pixels=${MAX_PIXELS:-0}
+rerun=${RERUN:-0}
 
 
 
@@ -66,8 +69,15 @@ fi
 
 MORE_ARGS="${MORE_ARGS},layer_list=${layer_list_str},image_token_ratio=${image_token_ratio},image_token_ratio_list=${image_token_ratio_list_str}"
 
+if [[ "$max_pixels" != 0 && -n "$max_pixels" ]]; then
+    MORE_ARGS="${MORE_ARGS},max_pixels=${max_pixels}"
+    PATH_SUFFIX="${PATH_SUFFIX}_maxp-${max_pixels}"
+fi
+
 echo "MORE_ARGS: $MORE_ARGS"
 echo "PATH_SUFFIX: $PATH_SUFFIX"
+echo "Batch size: $batch_size"
+echo "Rerun: $rerun"
 
 base_output_path="${base_output_path}${PATH_SUFFIX}/lmms_eval"
 
@@ -103,14 +113,35 @@ eval_list=( \
 "vstar_bench" \
 )
 
+tasks_override=${TASKS:-""}
+if [[ -n "$tasks_override" ]]; then
+    tasks_override=${tasks_override//,/ }
+    read -ra eval_list <<< "$tasks_override"
+fi
 
-for task in ${eval_list[@]}
+if [[ ${#eval_list[@]} -eq 0 ]]; then
+    echo "Error: task list is empty."
+    exit 1
+fi
+
+
+for task in "${eval_list[@]}"
 do
     output_path=${base_output_path}/${task}
 
     if [ -d "$output_path" ]; then
+        if [[ "$rerun" == "1" ]]; then
+            if [[ -n "$output_path" && "$output_path" == "$base_output_path"/* ]]; then
+                echo "Output path $output_path already exists. RERUN=1, deleting and re-running task: $task"
+                rm -rf -- "$output_path"
+            else
+                echo "Error: refusing to delete unexpected output_path: '$output_path'"
+                exit 1
+            fi
+        else
         echo "Output path $output_path already exists. Skipping evaluation for task: $task"
         continue
+        fi
     fi
 
     echo "Evaluating task: $task"
@@ -118,12 +149,9 @@ do
         --model qwen2_5_vl_vscan \
         --model_args=pretrained=${base_model},attn_implementation=flash_attention_2${MORE_ARGS} \
         --tasks $task \
-        --batch_size 1 \
+        --batch_size $batch_size \
         --output_path $output_path \
         --verbosity=DEBUG
 done
-
-
-
 
 

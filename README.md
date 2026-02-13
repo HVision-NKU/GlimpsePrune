@@ -34,6 +34,7 @@ For more technical details, please refer to our [paper](https://arxiv.org/abs/25
 
 
 ## Table of Contents
+- [Table of Contents](#table-of-contents)
 - [✨ Key Features](#-key-features)
 - [🚀 News](#-news)
 - [🖼️ Framework Overview](#️-framework-overview)
@@ -41,11 +42,18 @@ For more technical details, please refer to our [paper](https://arxiv.org/abs/25
 - [✅ Roadmap](#-roadmap)
 - [🛠️ Installation](#️-installation)
 - [📦 Models and Data](#-models-and-data)
+  - [Model Download](#model-download)
+  - [Data Preparation](#data-preparation)
 - [▶️ How to Use](#️-how-to-use)
   - [Local Demo](#local-demo)
   - [Inference](#inference)
   - [Evaluation](#evaluation)
+    - [Free-form VQA](#free-form-vqa)
+    - [Short-form VQA](#short-form-vqa)
+    - [Efficiency](#efficiency)
   - [Training](#training)
+    - [Train GlimpsePrune](#train-glimpseprune)
+    - [Train GlimpsePrune+ (Optional)](#train-glimpseprune-optional)
 - [🙏 Acknowledgements](#-acknowledgements)
 - [🖊️ Citation](#️-citation)
 - [📧 Contact Us](#-contact-us)
@@ -88,6 +96,11 @@ We evaluated GlimpsePrune on multiple VQA benchmarks. The results show that it a
   <img src="assets/shortform_results.png" width="90%">
 </p>
 
+<p align="center">
+  <b>Efficiency comparsion on V* in free form (batch size=4)</b><br>
+  <img src="assets/efficiency.png" width="90%">
+</p>
+
 ## ✅ Roadmap
 
 - [x] Support for [Qwen2.5-VL](https://github.com/QwenLM/Qwen2.5-VL)
@@ -96,10 +109,8 @@ We evaluated GlimpsePrune on multiple VQA benchmarks. The results show that it a
 - [x] Provide a local Gradio Demo
 - [x] Support for [LLaVA-1.5](https://github.com/haotian-liu/LLaVA)
 - [x] Provide evaluation [scripts](scripts) for various visual token compression methods ([PyramidDrop](https://github.com/Cooperx521/PyramidDrop), [VisionZip](https://github.com/dvlab-research/VisionZip), etc.) on the free-form VQA
-- [ ] Support for batch input (Batch Inference)
-- [ ] Support for video input
-- [ ] Support for [LLaVA-NeXt](https://github.com/LLaVA-VL/LLaVA-NeXT)
-- [ ] Provide an online Demo
+- [x] Support for batch input (Batch Inference)
+
 
 ## 🛠️ Installation
 
@@ -208,6 +219,18 @@ BASE_MODEL=<base_model> bash scripts/eval_qwen_gp.sh <new_modules_dir>
 # Set a maximum retention rate
 BASE_MODEL=<base_model> MAX_REMAIN_RATIO=0.111 bash scripts/eval_qwen_gp.sh <new_modules_dir>
 ```
+
+#### Efficiency
+
+```bash
+# Download V* bench
+hf download https://huggingface.co/docs/huggingface_hub/guides/download --repo-type dataset --local-dir datas/vstar_bench
+
+# Test GlimpsePrune under 4096 visual tokens with 11.1% retention ratio. 
+TASKS="vstar" BATCH_SIZE_PER_DEVICE=4 WARMUP_ITERS=3 TIME_LOGGER=1 MEMORY_LOGGER=1 FIXED_REMAIN_RATIO=0.111 MAX_PIXELS=3211264 BASE_MODEL=$base_model bash scripts/infer_qwen_gp_cot.sh $new_modules_dir
+
+```
+
 
 ### Training
 

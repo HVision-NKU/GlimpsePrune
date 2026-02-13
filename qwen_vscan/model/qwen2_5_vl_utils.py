@@ -133,7 +133,13 @@ def token_merging(image_embeds, keep_indices, scaling=1):
     
     return merged_features
 
-def window_selection(attn_weights, num_keep_tokens, image_grid_thw, window_size=4):
+def window_selection(
+    attn_weights: torch.Tensor,
+    num_keep_tokens: int,
+    image_grid_thw: torch.Tensor,
+    window_size: int = 4,
+    spatial_merge_size: int = 2,
+):
     """
     Selects the top num_keep_tokens tokens with the highest attention weights. 
     The tokens are selected from non-overlapping windows of size window_size x window_size.
@@ -144,14 +150,35 @@ def window_selection(attn_weights, num_keep_tokens, image_grid_thw, window_size=
     """
     # start_time = time.time()
     
-    token_h, token_w = image_grid_thw[0, 1] // 2, image_grid_thw[0, 2] // 2
-    assert token_h * token_w == attn_weights.shape[0], "The number of tokens in the window is not equal to num_keep_tokens"
+    if num_keep_tokens <= 0:
+        return torch.empty(0, device=attn_weights.device, dtype=torch.int)
+
+    if image_grid_thw.dim() == 2:
+        if image_grid_thw.shape[0] != 1:
+            raise ValueError(f"window_selection expects a single grid_thw, got shape={tuple(image_grid_thw.shape)}")
+        grid = image_grid_thw[0]
+    elif image_grid_thw.dim() == 1:
+        if image_grid_thw.numel() != 3:
+            raise ValueError(f"window_selection expects grid_thw with 3 values, got shape={tuple(image_grid_thw.shape)}")
+        grid = image_grid_thw
+    else:
+        raise ValueError(f"window_selection expects grid_thw dim 1 or 2, got dim={image_grid_thw.dim()}")
+
+    llm_grid_t = int(grid[0].item())
+    llm_grid_h = int((grid[1] // spatial_merge_size).item())
+    llm_grid_w = int((grid[2] // spatial_merge_size).item())
+    if llm_grid_t != 1:
+        raise ValueError(f"window_selection only supports images (t=1). Got t={llm_grid_t}.")
+
+    token_h, token_w = llm_grid_h, llm_grid_w
+    if token_h * token_w != attn_weights.shape[0]:
+        raise AssertionError(
+            f"The number of tokens ({attn_weights.shape[0]}) does not match token_h*token_w ({token_h}*{token_w})"
+        )
     
-    num_windows_h = (token_h / window_size).floor().int()
-    num_windows_w = (token_w / window_size).floor().int()
+    num_windows_h = max(1, token_h // window_size)
+    num_windows_w = max(1, token_w // window_size)
     num_windows = num_windows_h * num_windows_w
-    extra_h = token_h - (num_windows_h * window_size)
-    extra_w = token_w - (num_windows_w * window_size)
 
     # attn_weights = attn_weights.view(token_h, token_w)
     # if extra_h > 0:
@@ -166,19 +193,15 @@ def window_selection(attn_weights, num_keep_tokens, image_grid_thw, window_size=
     total_counter = 0
     
     # Calculate the limit of the number of tokens to keep in each window
-    limit = (num_keep_tokens / num_windows).ceil().int()
+    limit = math.ceil(num_keep_tokens / num_windows)
     
 
     keep_indices = torch.zeros(num_keep_tokens, device=attn_weights.device, dtype=torch.int)
     for index in sorted_indices:
-        x = (index // token_w) // window_size
-        y = (index % token_w) // window_size
-        if x == num_windows_h:
-            x = num_windows_h - 1
-        if y == num_windows_w:
-            y = num_windows_w - 1
-        x = x.int()
-        y = y.int()
+        x = int(((index // token_w) // window_size).item())
+        y = int(((index % token_w) // window_size).item())
+        x = min(x, num_windows_h - 1)
+        y = min(y, num_windows_w - 1)
         if window_counter[x, y] < limit:
             window_counter[x, y] += 1
             keep_indices[total_counter] = index

@@ -1,14 +1,10 @@
 model_name_or_path: Qwen/Qwen2.5-VL-7B-Instruct
-train_dataset: dataset_configs/gqa_rand.yaml
-loc_loss_class: MaskLoss
-loc_dice_weight: 1.0
-loc_bce_weight: 0.1
-kd_weight: 0.0
-reward_weight: 0.0
-loc_weight: 1.0
-le_weight: 1.0
+train_dataset: dataset_configs/viscot_rand.yaml
+kd_weight: 0.04
+reward_weight: 1.0
+loc_weight: 0.0
+le_weight: 0.0
 use_attention_logits: true
-le_norm_type: rmsnorm
 le_layers:
   - 0
   - 1
@@ -42,7 +38,9 @@ selected_layers:
   - 18
 reduce_layer: 18
 
-
+load_new_modules: ashun989/GlimpsePrune_Qwen2.5-VL-7B-Instruct
+gen_mask_usage_ratio: 1.0
+gen_mask_max_ratio: 0.111
 
 attn_fuse_type: AttnFuserV1
 attn_fuse_size: 256
@@ -59,8 +57,22 @@ selected_visual_layers:
   - 15
   - 7
 
-load_adapter: output/qwen2_5_7b_gp_lora_ft_0801
-output_dir: output/qwen2_5_7b_gp_plus_0801
+
+output_dir: output/qwen2_5_7b_gp_lora_ft_genmask_1120
+
+# RL config
+max_completion_length: 128
+max_seq_length: 640
+max_input_remain_seq_length: 512
+max_input_seq_length: 6000
+num_generations: 4
+
+# Lora config
+use_peft: true
+lora_r: 32
+lora_alpha: 64
+lora_dropout: 0.05
+lora_task_type: CAUSAL_LM
 
 
 bf16: true

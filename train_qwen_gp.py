@@ -1016,6 +1016,7 @@ class GPTrainer(Trainer):
         self.max_completion_length = self.args.max_completion_length
         self.max_seq_length = self.args.max_seq_length
         self.gen_mask_usage_ratio = self.args.gen_mask_usage_ratio
+        self.gen_mask_max_ratio = self.args.gen_mask_max_ratio
         
         if self.reward_weight <= 0:
             self.num_iterations = 1
@@ -1094,27 +1095,51 @@ class GPTrainer(Trainer):
         if sum(use_gen_mask_by_necessity) == 0 and self.gen_mask_usage_ratio <= 0:
             return [False] * len(original_ref_token_masks)
         use_gen_mask = [mask is None or torch.rand(1).item() < self.gen_mask_usage_ratio for mask in original_ref_token_masks]
+        if sum(use_gen_mask) == 0:
+            return use_gen_mask
         
         if image_token_mask_logits is None:
-            with torch.no_grad():
-                with self.accelerator.unwrap_model(model, keep_fp32_wrapper=False).disable_adapter():
-                    rtn = model(
-                        **inputs,
-                        do_selection=True,
-                        delay_selection=True,
-                        use_cache=False,
-                        return_dict=True,
-                    )
-                    image_token_mask_logits = rtn.image_token_mask_logits
-                    del rtn
-                    self.accelerator.unwrap_model(model).reset_image_tokens_cache()
+            base_model = self.accelerator.unwrap_model(model, keep_fp32_wrapper=False)
+            was_training = base_model.training
+            try:
+                if was_training:
+                    base_model.eval()
+                with torch.no_grad():
+                    with base_model.disable_adapter():
+                        rtn = base_model(
+                            **inputs,
+                            do_selection=True,
+                            delay_selection=True,
+                            use_cache=False,
+                            return_dict=True,
+                        )
+                image_token_mask_logits = rtn.image_token_mask_logits
+                del rtn
+                base_model.reset_image_tokens_cache()
+            finally:
+                if was_training:
+                    base_model.train()
         new_ref_token_masks = []
+        gen_masks_for_debug = []
         for i, original_mask in enumerate(original_ref_token_masks):
             if use_gen_mask[i]:
-                new_ref_token_masks.append(image_token_mask_logits[i][-1:].detach().sigmoid())
+                gen_mask = image_token_mask_logits[i][-1:].detach().sigmoid()
+                if self.gen_mask_max_ratio is not None:
+                    bool_mask = gen_mask > 0.5
+                    remain_ratio = bool_mask.sum().item() / bool_mask.numel()
+                    if remain_ratio > self.gen_mask_max_ratio:
+                        max_remain_num = int(self.gen_mask_max_ratio * bool_mask.numel())
+                        topk_indices = torch.topk(gen_mask.view(-1), max_remain_num, dim=-1).indices
+                        constrained_mask = torch.zeros_like(gen_mask, dtype=torch.bool)
+                        constrained_mask.view(-1)[topk_indices] = True
+                        gen_mask = constrained_mask
+                gen_masks_for_debug.append(gen_mask > 0.5)
+                new_ref_token_masks.append(gen_mask)
             else:
                 new_ref_token_masks.append(original_mask)
         inputs['ref_token_masks'] = new_ref_token_masks
+        if len(gen_masks_for_debug) > 0:
+            self._debug_check_gen_mask_consistency(gen_masks_for_debug)
         return use_gen_mask
             
     
@@ -1525,6 +1550,27 @@ class GPTrainer(Trainer):
         for key, value in kwargs.items():
             info += f"\n{key}: {value}"
         print(info)
+
+    @debug_calls(only_rank0=False)
+    def _debug_check_gen_mask_consistency(self, gen_masks: List[torch.Tensor]):
+        """
+        Check whether generated masks are identical across ranks.
+        """
+        if self.accelerator.num_processes <= 1 or len(gen_masks) == 0:
+            return
+        flat_mask = torch.cat([mask.flatten().to(dtype=torch.int8, device=self.accelerator.device) for mask in gen_masks])
+        gathered = self.accelerator.gather_for_metrics(flat_mask)
+        world_size = self.accelerator.num_processes
+        if gathered.numel() % world_size != 0:
+            print(f"gen_mask gather shape mismatch: local={flat_mask.shape}, gathered={gathered.shape}, world={world_size}")
+            return
+        gathered = gathered.view(world_size, -1)
+        ref = gathered[0]
+        mismatch_ranks = [rank for rank in range(1, world_size) if not torch.equal(ref, gathered[rank])]
+        if len(mismatch_ranks) == 0:
+            print("gen_mask is consistent across all ranks.")
+        else:
+            print(f"gen_mask mismatch across ranks. Differing ranks: {mismatch_ranks}")
             
         
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -1562,7 +1608,7 @@ class GPTrainer(Trainer):
         
         model_to_save = self.accelerator.unwrap_model(self.model)
         if self.loc_weight > 0 or self.le_weight > 0:
-            model_to_save.save_new_modules(output_dir)
+            model_to_save.save_new_modules(output_dir, state_dict)
         
         if self.reward_weight > 0:
             model_to_save.config.save_pretrained(output_dir)
@@ -1716,6 +1762,11 @@ class GPTrainingArguments(TrainingArguments):
         default=0.0,
         metadata={"help": "Ratio of image token mask usage in generation."},
     )
+    
+    gen_mask_max_ratio: Optional[float] = field(
+        default=None,
+        metadata={"help": "When using generated masks, cap the valid ratio (mask > 0.5) similar to max_remain_ratio."},
+    )
         
     min_ratio: float = field(
         default=0.1,
@@ -1775,10 +1826,6 @@ class GPModelConfig:
     reduce_layer: int = field(
         default=1000,
         metadata={"help": "Layer to do reduce during prefilling."},
-    )
-    anchor_positions: Optional[List[str]] = field(
-        default=None,
-        metadata={"help": "Anchor positions for reduction. If None, use the default behavior."}
     )
     use_attention_logits: bool = field(
         default=False,

@@ -31,12 +31,29 @@ CHOICE_BRIEF_PROMPT = "\nAnswer with the option's letter from the given choices 
 
 
 def setup_distributed():
+    """
+    Initialize torch.distributed only when running with multiple processes.
+
+    - When launched via `torchrun`, env vars like WORLD_SIZE/RANK/LOCAL_RANK are set.
+    - For single-process debugging (e.g. VSCode debug launch), avoid initializing a process group.
+    """
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    torch.cuda.set_device(local_rank) 
-    dist.init_process_group(backend="nccl")
-    world_size = dist.get_world_size()
-    rank = dist.get_rank()
-    return local_rank, world_size, rank
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    rank = int(os.environ.get("RANK", "0"))
+
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+
+    if world_size <= 1:
+        return local_rank, 1, 0
+
+    if not dist.is_available():
+        raise RuntimeError("torch.distributed is not available but WORLD_SIZE>1 was requested.")
+
+    if not dist.is_initialized():
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+        dist.init_process_group(backend=backend, init_method="env://")
+    return local_rank, dist.get_world_size(), dist.get_rank()
 
 
 @dataclass
@@ -68,6 +85,10 @@ class ScriptArgs:
     enable_time_logger: bool = field(
         default=False,
         metadata={"help": "Whether to enable time logger."}
+    )
+    warmup_iters: int = field(
+        default=0,
+        metadata={"help": "Disable time logger for the first N dataloader iterations (batches) of each dataset."}
     )
     enable_memory_logger: bool = field(
         default=False,
@@ -113,6 +134,14 @@ class ScriptArgs:
         default=1,
         metadata={"help": "Batch size per device."}
     )
+    min_pixels: Optional[int] = field(
+        default=None,
+        metadata={"help": "Minimum pixels of Qwen Vision Encoder."}
+    )
+    max_pixels: Optional[int] = field(
+        default=None,
+        metadata={"help": "Maximum pixels of Qwen Vision Encoder."}
+    )
     max_new_tokens: int = field(
         default=1024,
         metadata={"help": "Maximum number of new tokens to generate."}
@@ -137,10 +166,6 @@ class ScriptArgs:
         default=None,
         metadata={"help": "After this layer in LLM when decoding, the visual tokens are reduced."}
     )
-    anchor_positions: Optional[List[str]] = field(
-        default=None,
-        metadata={"help": "Anchor positions for reduction. If None, use the default behavior."}
-    )
     min_remain_num: Optional[int] = field(
         default=None,
         metadata={"help": "Minimum number of visual tokens to remain after reduction. If None, use the default behavior."}
@@ -148,6 +173,10 @@ class ScriptArgs:
     max_remain_ratio: Optional[float] = field(
         default=None,
         metadata={"help": "Maximum ratio of visual tokens to remain after reduction. If None, use the default behavior."}
+    )
+    fixed_remain_ratio: Optional[float] = field(
+        default=None,
+        metadata={"help": "Fixed ratio of visual tokens to remain after reduction (top-k by score). If None, disabled."}
     )
     do_func_name: Literal["generate", "glimpse"] = field(
         default="generate",
@@ -244,15 +273,23 @@ def cot_bench_dataset_mapper(one_data, args):
     return one_data
 
 def vstar_bench_dataset_mapper(one_data, args):
-    query = one_data["text"]
-    if not args.brief:
-        query = query.replace(CHOICE_BRIEF_PROMPT, "")
-    img_path = os.path.join(args.img_dir, one_data["image"])
+    query = one_data["question"]
+    if args.brief:
+        option_list = one_data["options"]
+        option_str = "\n".join([f"{chr(ord('A') + i)}. {option}" for i, option in enumerate(option_list)])
+        query = f"{query}\n{option_str}\n{CHOICE_BRIEF_PROMPT}"
+    img_path = os.path.join(args.img_dir, "vstar_bench", one_data["image"])
     one_data[QUERY_KEY] = query
     one_data[IMG_PATH_KEY] = img_path
     if args.use_box:
-        pass
-        # raise NotImplementedError("use_box not implemented for vstar")
+        bboxes = one_data["bbox"]  # list of xywh
+        norm_bboxs = []
+        for bbox in bboxes:
+            img = Image.open(img_path)
+            width, height = img.size
+            x, y, w, h = bbox
+            norm_bboxs.append(norm_bbox([x, y, x + w, y + h], width, height))
+        one_data[BOX_KEY] = norm_bboxs
     return one_data
 
 
@@ -315,10 +352,14 @@ def save_results(dataset: datasets.Dataset, all_outputs: Dict[str, List[Any]], r
 def gather_and_save_info(do_func, args, extra_infos: Dict[str, Any], info_path: str, world_size: int, local_rank: int):
     avg_time = do_func.get_average_time() / args.batch_size_per_device
     call_count = do_func.get_call_count()
-    all_avg_time = [None] * world_size
-    all_call_count = [None] * world_size
-    dist.all_gather_object(all_avg_time, avg_time)
-    dist.all_gather_object(all_call_count, call_count)
+    if world_size > 1 and dist.is_available() and dist.is_initialized():
+        all_avg_time = [None] * world_size
+        all_call_count = [None] * world_size
+        dist.all_gather_object(all_avg_time, avg_time)
+        dist.all_gather_object(all_call_count, call_count)
+    else:
+        all_avg_time = [avg_time]
+        all_call_count = [call_count]
     
     if extra_infos and world_size > 1:
         # TODO: gather extra infos from all ranks
@@ -377,9 +418,12 @@ def gather_output(rank_outputs: Dict[str, List[Any]], total_samples: int, rank_s
     all_outputs = {}
     for key, rank_list in rank_outputs.items():
         rank_list_with_index = [(rank_start + i, item) for i, item in enumerate(rank_list)]
-        all_rank_list_with_index = [None] * world_size
-        dist.all_gather_object(all_rank_list_with_index, rank_list_with_index)
-        assert all_rank_list_with_index[-1][-1][0] == total_samples - 1
+        if world_size > 1 and dist.is_available() and dist.is_initialized():
+            all_rank_list_with_index = [None] * world_size
+            dist.all_gather_object(all_rank_list_with_index, rank_list_with_index)
+            assert all_rank_list_with_index[-1][-1][0] == total_samples - 1
+        else:
+            all_rank_list_with_index = [rank_list_with_index]
         
         if local_rank == 0:
             all_outputs[key] = [None] * total_samples
@@ -392,7 +436,7 @@ def gather_output(rank_outputs: Dict[str, List[Any]], total_samples: int, rank_s
 
 
 
-def gather_extra_infos(all_outputs: Dict[str, List[Any]]) -> Dict[str, Any]:
+def gather_extra_infos(all_outputs: Dict[str, List[Any]], batch_size: int) -> Dict[str, Any]:
     extra_infos = {}
     
     conf_mats = all_outputs.pop(CONF_MAT_KEY, None)
@@ -425,6 +469,12 @@ def gather_extra_infos(all_outputs: Dict[str, List[Any]]) -> Dict[str, Any]:
     if all_time_logger_stats:
         # extra_infos.update(all_time_logger_stats)
         for k, v in all_time_logger_stats.items():
+            if batch_size > 0:
+                v = dict(v)
+                if "average_time_ms" in v:
+                    v["average_time_ms"] = v["average_time_ms"] / batch_size
+                if "last_duration_ms" in v:
+                    v["last_duration_ms"] = v["last_duration_ms"] / batch_size
             if k in extra_infos:
                 extra_infos[k].update(v)
             else:
@@ -499,7 +549,11 @@ def process_one_dataset(dataset, dataset_name, world_size, local_rank, infer_mod
                 batched_querys, batched_img_paths, batched_bboxes
             )
             if args.do_func_name == "glimpse":
-                image_token_bool_masks = infer_model.do_glimpse(inputs, generation_config)
+                time_logger_active = args.enable_time_logger and (bid >= args.warmup_iters)
+                memory_logger_active = args.enable_memory_logger
+                with time_logger_set_active(time_logger_active), \
+                        memory_logger_set_active(memory_logger_active):
+                    image_token_bool_masks = infer_model.do_glimpse(inputs, generation_config)
                 ref_token_masks = inputs.get('ref_token_masks', None)
                 metric_dict = cal_box_metrics(image_token_bool_masks, ref_token_masks)
                 if args.save_masks:
@@ -510,7 +564,11 @@ def process_one_dataset(dataset, dataset_name, world_size, local_rank, infer_mod
                 avg_time = infer_model.do_glimpse.get_average_time() / curr_batch_size
                 pbar.set_postfix_str(f"Avg glimpse time: {avg_time/1000:.4f}s")
             else:
-                generated_ids = infer_model.do_generate(inputs, generation_config, args.do_selection)
+                time_logger_active = args.enable_time_logger and (bid >= args.warmup_iters)
+                memory_logger_active = args.enable_memory_logger
+                with time_logger_set_active(time_logger_active), \
+                        memory_logger_set_active(memory_logger_active):
+                    generated_ids = infer_model.do_generate(inputs, generation_config, args.do_selection)
                 generated_length = [len(generated_id) for generated_id in generated_ids]
                 batch_output_text = infer_model.batch_decode(
                     generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
@@ -521,11 +579,12 @@ def process_one_dataset(dataset, dataset_name, world_size, local_rank, infer_mod
                 pbar.set_postfix_str(f"Avg generate time: {avg_time/1000:.4f}s")
             pbar.update(curr_batch_size)
             pbar.refresh()
+            torch.cuda.empty_cache()
         
     print(f"Rank {local_rank} finished processing {len(rank_datas)} samples.")
     
     all_outputs = gather_output(rank_outputs, len(dataset), st, world_size, local_rank)
-    extra_infos = gather_extra_infos(all_outputs)    
+    extra_infos = gather_extra_infos(all_outputs, args.batch_size_per_device)    
     
     result_path = os.path.join(args.output_dir, f"{dataset_name}_{task_name}.jsonl")
     save_results(dataset, all_outputs, result_path)
@@ -536,7 +595,8 @@ def process_one_dataset(dataset, dataset_name, world_size, local_rank, infer_mod
     else:
         do_func = infer_model.do_generate
     gather_and_save_info(do_func, args, extra_infos, info_path, world_size, local_rank)
-    dist.barrier()
+    if world_size > 1 and dist.is_available() and dist.is_initialized():
+        dist.barrier()
 
 
 def parse_dataset_names(dataset_names: str) -> List[str]:
@@ -554,6 +614,8 @@ def main():
     args = parser.parse_args_into_dataclasses()[0]
     
     set_seed(args.seed)
+
+    assert args.warmup_iters >= 0, "warmup_iters should be a non-negative integer"
     
     if args.num_samples is not None:
         num_samples = args.num_samples
@@ -578,8 +640,8 @@ def main():
     processed_datasets = {}
     dataset_names = parse_dataset_names(args.datasets)
     for name in dataset_names:
-        if name == "vstar":
-            dataset_path = os.path.join(args.cot_bench_dir, "test_questions.jsonl")
+        if name.startswith("vstar"):
+            dataset_path = os.path.join(args.cot_bench_dir, f"{name}.jsonl")
             mapper_func = vstar_bench_dataset_mapper
         elif name.startswith("scienceqa_img"):
             split = name.split("_")[-1]
@@ -622,7 +684,7 @@ def main():
                 print(f"Result file {result_path} already exists. Skipping...")
                 continue
             print(f"Processing {dataset_name} dataset...")
-            with time_logger_set_active(True), \
+            with time_logger_set_active(False), \
                  memory_logger_set_active(args.enable_memory_logger):
                 process_one_dataset(dataset, dataset_name, world_size, local_rank, infer_model, device, args)
             reset_all_time_logger_stats()
@@ -630,7 +692,8 @@ def main():
             torch.cuda.empty_cache()
   
     # destroy the process group
-    dist.destroy_process_group()        
-
+    if dist.is_available() and dist.is_initialized():
+        dist.destroy_process_group()
+        
 if __name__ == "__main__":
     main()

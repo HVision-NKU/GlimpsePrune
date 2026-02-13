@@ -22,8 +22,19 @@ class Qwen2_5_VL(BaseInferModel):
         self._model = model
         self._model.eval()
     
-    def _init_processor(self, **kwargs):
-        self._processor = Qwen2_5_VLProcessor.from_pretrained(self._base_model, padding_side="left")
+    def _init_processor(self, 
+                        min_pixels,
+                        max_pixels,
+                        **kwargs):
+        _init_kwargs = dict(padding_side="left")
+        if min_pixels is not None:
+            _init_kwargs["min_pixels"] = min_pixels
+            print(f"Min pixels: {min_pixels}")
+        if max_pixels is not None:
+            _init_kwargs["max_pixels"] = max_pixels
+            print(f"Max pixels: {max_pixels}")
+        
+        self._processor = Qwen2_5_VLProcessor.from_pretrained(self._base_model, **_init_kwargs)
     
     def _do_generate(self, inputs, generation_config, do_selection):
         generate_ids = self._model.generate(**inputs, generation_config=generation_config)
