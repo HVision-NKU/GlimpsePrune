@@ -223,7 +223,7 @@ BASE_MODEL=<base_model> MAX_REMAIN_RATIO=0.111 bash scripts/eval_qwen_gp.sh <new
 
 ```bash
 # 下载 V* 基准
-hf download https://huggingface.co/docs/huggingface_hub/guides/download --repo-type dataset --local-dir datas/vstar_bench
+hf download https://huggingface.co/datasets/craigwu/vstar_bench --repo-type dataset --local-dir datas/vstar_bench
 
 # 在 4096 视觉 token 和 11.1% 保留率下测试 GlimpsePrune。
 TASKS="vstar" BATCH_SIZE_PER_DEVICE=4 WARMUP_ITERS=3 TIME_LOGGER=1 MEMORY_LOGGER=1 FIXED_REMAIN_RATIO=0.111 MAX_PIXELS=3211264 BASE_MODEL=$base_model bash scripts/infer_qwen_gp_cot.sh $new_modules_dir
