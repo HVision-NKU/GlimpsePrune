@@ -15,10 +15,11 @@ base_model_suffix=${base_model_suffix/-instruct/}
 base_output_path="result/visionzip_${base_model_suffix}/viscot_bench"
 score_func="vllm_qwen_2_5_32b_int8"
 score_batch=32
-vllm_env=${VLLM_ENV:-""}
+vllm_env=${VLLM_ENV:-"gp_qwen"}
 
 brief=${BRIEF:-0}
 attn_implementation=${ATTN_IMPL:-""}
+tasks_override=${TASKS:-""}
 
 dominant=${DOMINANT:-0}
 contextual=${CONTEXTUAL:-0}
@@ -59,25 +60,32 @@ echo "MORE_ARGS: $MORE_ARGS"
 echo "PATH_SUFFIX: $PATH_SUFFIX"
 
 
-tasks=( \
-"cub" \
-"docvqa" \
-"dude" \
-"flickr30k" \
-"gqa" \
-"infographicsvqa" \
-"openimages" \
-"sroie" \
-"textcap" \
-"textvqa" \
-"visual7w" \
-"vsr"
-)
+if [[ -n "$tasks_override" ]]; then
+    tasks_override=${tasks_override//,/ }
+    read -ra tasks <<< "$tasks_override"
+else
+    tasks=( \
+    "cub" \
+    "docvqa" \
+    "dude" \
+    "flickr30k" \
+    "gqa" \
+    "infographicsvqa" \
+    "openimages" \
+    "sroie" \
+    "textcap" \
+    "textvqa" \
+    "visual7w" \
+    "vsr"
+    )
+fi
 
-datasets_str=""
-for task in "${tasks[@]}"; do
-    datasets_str="${datasets_str},${task}"
-done
+if [[ ${#tasks[@]} -eq 0 ]]; then
+    echo "Error: task list is empty."
+    exit 1
+fi
+
+datasets_str=$(IFS=, ; echo "${tasks[*]}")
 
 output_path=${base_output_path}${PATH_SUFFIX}
 
@@ -101,19 +109,19 @@ for task in "${tasks[@]}"; do
 done
 
 if [ -n "$vllm_env" ]; then
-    CONDA_HOME=$(conda info --base)
-    source $CONDA_HOME/bin/activate
-    conda activate $vllm_env
+    if [[ -n "${CONDA_HOME:-}" && -f "${CONDA_HOME}/bin/activate" ]]; then
+        # shellcheck disable=SC1090
+        source "${CONDA_HOME}/bin/activate"
+    fi
+    conda activate "$vllm_env"
     echo "Using VLLM environment: $vllm_env"
 fi
 
 
-VLLM_USE_V1=0 \
 python -m viscot_eval.cal_cot_score \
     --result-jsonl $result_paths \
     --mapper cot_bench \
     --score-func $score_func \
     --batch-size $score_batch \
-    --tensor-parallel-size $ngpus \
     --max-num-seqs $score_batch \
     --max-model-len 2048

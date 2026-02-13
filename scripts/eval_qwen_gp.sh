@@ -11,7 +11,11 @@ echo "Number of GPUs: $ngpus"
 export LMMS_EVAL_PLUGINS="my_lmms_eval"
 
 if [ -z "$1" ]; then
-    echo "Usage: $0 <new_modules_dir (e.g., result/xxx)>"
+    echo "Usage: $0 <new_modules_dir (e.g., result/xxx)> [adapter_dir]"
+    echo "Optional env: TASKS=\"vqav2_val_lite,gqa,...\" to override default task list"
+    echo "Optional env: BATCH_SIZE=1 to override default batch size"
+    echo "Optional env: MAX_PIXELS=1605632 to override processor max_pixels"
+    echo "Optional env: RERUN=1 to re-run even if output exists (will delete existing task dir)"
     exit 1
 fi
 
@@ -24,6 +28,9 @@ max_remain_ratio=${MAX_REMAIN_RATIO:-""}
 attn_implementation=${ATTN_IMPL:-"flash_attention_2"}
 adapter_merge=${ADAPTER_MERGE:-1}
 port=${PORT:-29501}
+batch_size=${BATCH_SIZE:-1}
+max_pixels=${MAX_PIXELS:-0}
+rerun=${RERUN:-0}
 
 MORE_ARGS=""
 PATH_SUFFIX=""
@@ -84,11 +91,18 @@ else
     MORE_ARGS="${MORE_ARGS},attn_implementation=flash_attention_2"
 fi
 
+if [[ "$max_pixels" != 0 && -n "$max_pixels" ]]; then
+    MORE_ARGS="${MORE_ARGS},max_pixels=$max_pixels"
+    PATH_SUFFIX="${PATH_SUFFIX}_maxp-${max_pixels}"
+fi
+
 base_output_path=${base_output_path}${PATH_SUFFIX}
 
 echo "Input (new_modules_dir): $new_modules_dir"
 echo "Output (base_output_path): $base_output_path"
 echo "More args: $MORE_ARGS"
+echo "Batch size: $batch_size"
+echo "Rerun: $rerun"
 
 
 eval_list=( \
@@ -104,13 +118,34 @@ eval_list=( \
 "vstar_bench" \
 )
 
-for task in ${eval_list[@]}
+tasks_override=${TASKS:-""}
+if [[ -n "$tasks_override" ]]; then
+    tasks_override=${tasks_override//,/ }
+    read -ra eval_list <<< "$tasks_override"
+fi
+
+if [[ ${#eval_list[@]} -eq 0 ]]; then
+    echo "Error: task list is empty."
+    exit 1
+fi
+
+for task in "${eval_list[@]}"
 do
     output_path=${base_output_path}/${task}
 
     if [ -d "$output_path" ]; then
+        if [[ "$rerun" == "1" ]]; then
+            if [[ -n "$output_path" && "$output_path" == "$base_output_path"/* ]]; then
+                echo "Output path $output_path already exists. RERUN=1, deleting and re-running task: $task"
+                rm -rf -- "$output_path"
+            else
+                echo "Error: refusing to delete unexpected output_path: '$output_path'"
+                exit 1
+            fi
+        else
         echo "Output path $output_path already exists. Skipping evaluation for task: $task"
         continue
+        fi
     fi
 
     echo "Evaluating task: $task"
@@ -118,7 +153,7 @@ do
         --model qwen2_5_vl_gp \
         --model_args "pretrained=${base_model},new_modules_dir=${new_modules_dir}${MORE_ARGS}" \
         --tasks $task \
-        --batch_size 1 \
+        --batch_size $batch_size \
         --output_path ${output_path} \
         --log_samples
 done

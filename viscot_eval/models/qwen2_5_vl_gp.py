@@ -18,9 +18,9 @@ class Qwen2_5_VL_GP(BaseInferModel):
                     use_ref_masks=False,
                     use_zero_masks=False,
                     reduce_layer=None,
-                    anchor_positions=None,
                     min_remain_num=None,
                     max_remain_ratio=None,
+                    fixed_remain_ratio=None,
                     adapter_dir=None,
                     adapter_merge=False,
                     new_modules_config=None,
@@ -51,12 +51,13 @@ class Qwen2_5_VL_GP(BaseInferModel):
             model.config.use_zero_masks = True
         if reduce_layer is not None:
             model.config.reduce_layer = reduce_layer
-        if anchor_positions is not None:
-            model.config.anchor_positions = anchor_positions
+            model.config.selected_layers = [reduce_layer]
         if min_remain_num is not None:
             model.config.min_remain_num = min_remain_num
         if max_remain_ratio is not None:
             model.config.max_remain_ratio = max_remain_ratio
+        if fixed_remain_ratio is not None:
+            model.config.fixed_remain_ratio = fixed_remain_ratio
 
         if adapter_dir is not None:
             model = PeftModel.from_pretrained(model, adapter_dir, is_trainable=False)
@@ -66,8 +67,19 @@ class Qwen2_5_VL_GP(BaseInferModel):
         self._model = model
         self._model.eval()
     
-    def _init_processor(self, **kwargs):
-        self._processor = Qwen2_5_VL_GP_Processor.from_pretrained(self._base_model, padding_side="left")
+    def _init_processor(self, 
+                        min_pixels,
+                        max_pixels,
+                        **kwargs):
+        _init_kwargs = dict(padding_side="left")
+        if min_pixels is not None:
+            _init_kwargs["min_pixels"] = min_pixels
+            print(f"Min pixels: {min_pixels}")
+        if max_pixels is not None:
+            _init_kwargs["max_pixels"] = max_pixels
+            print(f"Max pixels: {max_pixels}")
+        
+        self._processor = Qwen2_5_VL_GP_Processor.from_pretrained(self._base_model, **_init_kwargs)
 
     def _do_generate(self, inputs, generation_config, do_selection):
         self._model.reset_image_tokens_cache()

@@ -46,9 +46,9 @@ class Qwen2_5_VL_GPConfig(Qwen2_5_VLConfig):
         use_ref_masks=False,
         use_zero_masks=False,
         reduce_layer=1000,
-        anchor_positions=(),
         min_remain_num=1,
         max_remain_ratio=None,
+        fixed_remain_ratio=None,
         **kwargs,
     ):
         super().__init__(
@@ -93,9 +93,9 @@ class Qwen2_5_VL_GPConfig(Qwen2_5_VLConfig):
         self.use_ref_masks = use_ref_masks
         self.use_zero_masks = use_zero_masks
         self.reduce_layer = reduce_layer
-        self.anchor_positions = anchor_positions
         self.min_remain_num = min_remain_num
         self.max_remain_ratio = max_remain_ratio
+        self.fixed_remain_ratio = fixed_remain_ratio
         
 __all__ = [
     "Qwen2_5_VL_GPConfig",

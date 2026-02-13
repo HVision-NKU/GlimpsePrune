@@ -67,9 +67,43 @@ class Qwen2_5_VLForConditionalGeneration_X(Qwen2_5_VLForConditionalGeneration):
         # Qwen2-5-VL position_ids are prepareed with rope_deltas in forward
         model_inputs["position_ids"] = None
 
-        if cache_position[0] != 0:
+        if cache_position is not None and cache_position[0] != 0:
             model_inputs["pixel_values"] = None
             model_inputs["pixel_values_videos"] = None
+            model_inputs["image_grid_thw"] = None
+            model_inputs["video_grid_thw"] = None
+            model_inputs["second_per_grid_ts"] = None
+
+        # If the prompt was pruned in the prefill stage, the generation loop still carries the original
+        # `attention_mask` length. Rebuild it from the pruned prompt mask + generated tokens so shapes match the cache.
+        if past_key_values is not None and getattr(past_key_values, "get_seq_length", None) is not None:
+            past_len = int(past_key_values.get_seq_length())
+            if past_len > 0:
+                base_attn = getattr(self.model, "_vscan_prefill_attention_mask", None)
+                base_len = getattr(self.model, "_vscan_prefill_seq_len", None)
+                if base_attn is not None and base_len is not None:
+                    cur_input_ids = model_inputs.get("input_ids", None)
+                    cur_inputs_embeds = model_inputs.get("inputs_embeds", None)
+                    cur_len = int(cur_input_ids.shape[1]) if cur_input_ids is not None else int(cur_inputs_embeds.shape[1])
+
+                    gen_so_far = past_len - int(base_len)
+                    gen_so_far = max(gen_so_far, 0)
+                    extra = torch.ones(
+                        (base_attn.shape[0], gen_so_far + cur_len),
+                        device=base_attn.device,
+                        dtype=base_attn.dtype,
+                    )
+                    model_inputs["attention_mask"] = torch.cat([base_attn, extra], dim=1)
+                    model_inputs["cache_position"] = torch.arange(
+                        past_len, past_len + cur_len, device=base_attn.device, dtype=torch.long
+                    )
+
+                # Never forward vision inputs after prefill.
+                model_inputs["pixel_values"] = None
+                model_inputs["pixel_values_videos"] = None
+                model_inputs["image_grid_thw"] = None
+                model_inputs["video_grid_thw"] = None
+                model_inputs["second_per_grid_ts"] = None
         
         model_inputs["output_masks"] = output_masks
 
@@ -117,7 +151,7 @@ class Qwen2_5_VLForConditionalGeneration_X(Qwen2_5_VLForConditionalGeneration):
                     output_masks: bool = False):
         if output_masks:
             self.model.image_token_bool_masks = []
-        return self.llm_forward(
+        outputs = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
             attention_mask=attention_mask,
@@ -130,6 +164,8 @@ class Qwen2_5_VLForConditionalGeneration_X(Qwen2_5_VLForConditionalGeneration):
             cache_position=cache_position,
             output_masks=output_masks
         )
+        hidden_states = outputs[0]
+        return self.lm_head(hidden_states), outputs
     
     def forward(
         self,
@@ -221,61 +257,197 @@ class Qwen2_5_VLForConditionalGeneration_X(Qwen2_5_VLForConditionalGeneration):
                 pixel_values = pixel_values.type(self.visual.dtype)
                 visual_token_ratio = self.image_token_ratio
                 image_embeds, attn_weights_local, attn_weights_global = self.visual(pixel_values, grid_thw=image_grid_thw, output_attentions=visual_token_ratio!=1)
-                n_image_tokens = (input_ids == self.config.image_token_id).sum().item()
-                n_image_features = image_embeds.shape[0] # [n, 3584]
-                if n_image_tokens != n_image_features:
+                image_token_mask = (input_ids == self.config.image_token_id)
+                n_image_tokens_total = int(image_token_mask.sum().item())
+                n_image_features = int(image_embeds.shape[0])  # [n, 3584]
+                if n_image_tokens_total != n_image_features:
                     raise ValueError(
-                        f"Image features and image tokens do not match: tokens: {n_image_tokens}, features {n_image_features}"
+                        f"Image features and image tokens do not match: tokens: {n_image_tokens_total}, features {n_image_features}"
                     )
 
-                mask = (input_ids == self.config.image_token_id)
-                # print(n_image_tokens)
+                spatial_merge_size = int(self.config.vision_config.spatial_merge_size)
 
-                # print(position_ids.shape)
-                # print("x1:", position_ids[0,0,:])
-                # print("x2:", position_ids[1,0,:])
-                # print("x3:", position_ids[2,0,:])
+                # Track per-sample multi-image token layout for later (LLM-layer pruning).
+                # `image_grid_thw` is flattened across the whole batch in the same order as image tokens in `input_ids`.
+                if image_grid_thw is None:
+                    raise ValueError("`image_grid_thw` must be provided when `pixel_values` is not None.")
+
+                per_image_lens_full: List[int] = []
+                for grid in image_grid_thw:
+                    t, h, w = int(grid[0].item()), int(grid[1].item()), int(grid[2].item())
+                    per_image_lens_full.append(t * (h // spatial_merge_size) * (w // spatial_merge_size))
+                if sum(per_image_lens_full) != n_image_tokens_total:
+                    raise ValueError(
+                        "Sum(image_grid_thw token lens) does not match the number of `<|image_pad|>` tokens in `input_ids`: "
+                        f"sum(per_image_lens_full)={sum(per_image_lens_full)} vs n_image_tokens_total={n_image_tokens_total}"
+                    )
+
+                batch_size, seq_len = input_ids.shape
+                per_sample_image_lens_full: List[List[int]] = []
+                img_ptr = 0
+                for b in range(batch_size):
+                    n_b = int(image_token_mask[b].sum().item())
+                    lens_b: List[int] = []
+                    remain = n_b
+                    while remain > 0:
+                        if img_ptr >= len(per_image_lens_full):
+                            raise ValueError("Ran out of `image_grid_thw` entries when mapping images to batch samples.")
+                        l = int(per_image_lens_full[img_ptr])
+                        lens_b.append(l)
+                        img_ptr += 1
+                        remain -= l
+                    if remain != 0:
+                        raise ValueError(
+                            "Per-sample `<|image_pad|>` count is not compatible with `image_grid_thw` lens. "
+                            f"batch={b} remain={remain}"
+                        )
+                    per_sample_image_lens_full.append(lens_b)
+                if img_ptr != len(per_image_lens_full):
+                    raise ValueError(
+                        f"Unused `image_grid_thw` entries: used={img_ptr}, total={len(per_image_lens_full)}"
+                    )
 
                 self.model.keep_indices = None
                 self.model.image_grid_thw = image_grid_thw
+
+                # Phase-A visual pruning (token selection + token merging) + shrink `<|image_pad|>` spans in prompt.
                 if visual_token_ratio != 1:
-                    num_keep_tokens = int(visual_token_ratio * n_image_tokens)
-                    indices = torch.nonzero(mask)
+                    # Split visual tokens by images (flattened) and prune each image independently by ratio.
+                    image_embeds_chunks: List[torch.Tensor] = []
+                    per_sample_image_lens_kept: List[List[int]] = []
+                    keep_mask_rows: List[torch.Tensor] = []
+                    single_keep_indices = None
 
-                    keep_indices_local = window_selection(attn_weights_local, num_keep_tokens //2, image_grid_thw, window_size=4)
+                    # We will build the kept image embeddings in the same order as image tokens appear in `input_ids`
+                    # (batch-major, left-to-right), so we can scatter them back via `masked_scatter`.
+                    img_token_offset_global = 0
+                    img_grid_offset_global = 0
+                    for b in range(batch_size):
+                        img_pos_b = torch.nonzero(image_token_mask[b], as_tuple=False).squeeze(1)
+                        lens_b_full = per_sample_image_lens_full[b]
+                        pos_offset = 0
+                        keep_mask_b = torch.ones(seq_len, dtype=torch.bool, device=input_ids.device)
+                        lens_b_kept: List[int] = []
+                        for l_full in lens_b_full:
+                            grid_thw = image_grid_thw[img_grid_offset_global]
+                            img_grid_offset_global += 1
 
-                    attn_weights_global[keep_indices_local] = 0 # avoid repetition
-                    keep_indices_global = torch.topk(attn_weights_global, num_keep_tokens - num_keep_tokens // 2).indices
-                    
-                    keep_indices = torch.cat((keep_indices_local, keep_indices_global), dim=0)
-                    keep_indices = torch.sort(keep_indices, dim=0)[0]
-                    self.model.keep_indices = keep_indices
+                            embeds_img = image_embeds[img_token_offset_global : img_token_offset_global + l_full]
+                            if attn_weights_local is None or attn_weights_global is None:
+                                raise ValueError("Attention weights must be returned when visual_token_ratio != 1.")
+                            attn_local_img = attn_weights_local[img_token_offset_global : img_token_offset_global + l_full]
+                            attn_global_img = attn_weights_global[img_token_offset_global : img_token_offset_global + l_full]
+                            img_token_offset_global += l_full
 
-                    # Directly drop other tokens
-                    # image_embeds = image_embeds[keep_indices, :]
-                    # Token merging
-                    image_embeds = token_merging(image_embeds, keep_indices, scaling=1)
-                    
-                    # Select the tokens with the lowest attention weights to remove
-                    all_indices = torch.arange(n_image_tokens).to(keep_indices.device)
-                    remove_indices = all_indices[~torch.isin(all_indices, keep_indices)]
-                    indices_to_remove = indices[remove_indices]
-                    # indices_to_remove = indices[:num_remove_tokens]
-                    remove_mask = torch.ones_like(input_ids, dtype=torch.bool)
-                    for index in indices_to_remove:
-                        remove_mask[index[0], index[1]] = False
-                    input_ids = input_ids[remove_mask].reshape(input_ids.shape[0], -1)
-                    # Correctly apply the mask for position ids across all heads
-                    position_ids = position_ids[remove_mask.unsqueeze(0).expand(position_ids.shape[0], -1, -1)].reshape(position_ids.shape[0], position_ids.shape[1], -1)
+                            keep_len = int(visual_token_ratio * l_full)
+                            keep_len = max(1, min(keep_len, l_full))
+                            lens_b_kept.append(keep_len)
 
-                n_image_tokens_after = (input_ids == self.config.image_token_id).sum().item()
-                n_image_features_after = image_embeds.shape[0]
+                            if keep_len == l_full:
+                                keep_indices = torch.arange(l_full, device=embeds_img.device, dtype=torch.int)
+                                merged_img = embeds_img
+                            else:
+                                local_keep = keep_len // 2
+                                global_keep = keep_len - local_keep
+                                keep_parts: List[torch.Tensor] = []
+                                attn_global_work = attn_global_img
+                                if local_keep > 0:
+                                    keep_local = window_selection(
+                                        attn_local_img,
+                                        local_keep,
+                                        grid_thw,
+                                        window_size=4,
+                                        spatial_merge_size=spatial_merge_size,
+                                    )
+                                    keep_parts.append(keep_local)
+                                    attn_global_work = attn_global_img.clone()
+                                    attn_global_work[keep_local] = 0  # avoid repetition
+                                if global_keep > 0:
+                                    keep_global = torch.topk(attn_global_work, global_keep).indices.to(torch.int)
+                                    keep_parts.append(keep_global)
+                                keep_indices = torch.cat(keep_parts, dim=0)
+                                keep_indices = torch.sort(keep_indices, dim=0)[0]
+                                merged_img = token_merging(embeds_img, keep_indices, scaling=1)
+
+                            image_embeds_chunks.append(merged_img)
+                            if batch_size == 1 and len(per_sample_image_lens_full[0]) == 1:
+                                single_keep_indices = keep_indices.to(dtype=torch.long)
+
+                            # Drop corresponding `<|image_pad|>` tokens in the prompt for this image.
+                            pos_img = img_pos_b[pos_offset : pos_offset + l_full]
+                            pos_offset += l_full
+                            keep_mask_img = torch.zeros(l_full, device=pos_img.device, dtype=torch.bool)
+                            keep_mask_img[keep_indices.to(device=pos_img.device, dtype=torch.long)] = True
+                            drop_pos_img = pos_img[~keep_mask_img]
+                            if drop_pos_img.numel() > 0:
+                                keep_mask_b[drop_pos_img] = False
+
+                        per_sample_image_lens_kept.append(lens_b_kept)
+                        keep_mask_rows.append(keep_mask_b)
+
+                    # Apply per-row keep masks and left-pad back to a rectangular batch.
+                    input_ids_rows: List[torch.Tensor] = []
+                    attn_rows: List[torch.Tensor] = []
+                    pos_rows: List[torch.Tensor] = []
+                    max_new_len = 0
+                    for b in range(batch_size):
+                        km = keep_mask_rows[b]
+                        input_b = input_ids[b][km]
+                        if attention_mask is None:
+                            attn_b = torch.ones_like(input_b, dtype=torch.long)
+                        else:
+                            attn_b = attention_mask[b][km]
+                        pos_b = position_ids[:, b, km]
+                        input_ids_rows.append(input_b)
+                        attn_rows.append(attn_b)
+                        pos_rows.append(pos_b)
+                        max_new_len = max(max_new_len, int(input_b.shape[0]))
+
+                    pad_id = int(self.config.pad_token_id) if self.config.pad_token_id is not None else 0
+                    input_ids_new = input_ids.new_full((batch_size, max_new_len), pad_id)
+                    attention_mask_new = attn_rows[0].new_zeros((batch_size, max_new_len))
+                    position_ids_new = position_ids.new_zeros((position_ids.shape[0], batch_size, max_new_len))
+                    for b in range(batch_size):
+                        cur_len = int(input_ids_rows[b].shape[0])
+                        pad_left = max_new_len - cur_len
+                        input_ids_new[b, pad_left:] = input_ids_rows[b]
+                        attention_mask_new[b, pad_left:] = attn_rows[b]
+                        position_ids_new[:, b, pad_left:] = pos_rows[b]
+
+                    input_ids = input_ids_new
+                    attention_mask = attention_mask_new
+                    position_ids = position_ids_new
+
+                    image_embeds = torch.cat(image_embeds_chunks, dim=0)
+                    self.model.image_lens_list = per_sample_image_lens_kept
+                    self.model.keep_indices = single_keep_indices
+                else:
+                    self.model.image_lens_list = per_sample_image_lens_full
+
+                # Update image token bookkeeping on the (possibly) pruned prompt.
+                image_token_mask = (input_ids == self.config.image_token_id)
+                n_image_tokens_after = int(image_token_mask.sum().item())
+                n_image_features_after = int(image_embeds.shape[0])
                 self.model.n_image_tokens = n_image_tokens_after
-                self.model.image_start_index = torch.nonzero(mask)[0, 1]
+                self.model.image_token_mask = image_token_mask
+                # Cache the (possibly) pruned prompt mask for generation-time reconstruction.
+                if attention_mask is None:
+                    self.model._vscan_prefill_attention_mask = torch.ones_like(input_ids, dtype=torch.long)
+                else:
+                    self.model._vscan_prefill_attention_mask = attention_mask
+                self.model._vscan_prefill_seq_len = int(input_ids.shape[1])
                 if n_image_tokens_after != n_image_features_after:
                     raise ValueError(
                         f"Image features and image tokens do not match after pruning: tokens: {n_image_tokens_after}, features {n_image_features_after}"
                     )
+
+                # Update rope deltas to match the (padded) pruned prompt length, so generation uses consistent positions.
+                # (We can't call `get_rope_index` again because `image_grid_thw` still reflects the unpruned grids.)
+                if position_ids is not None:
+                    max_pos = position_ids.max(dim=0).values.max(dim=-1).values  # [batch]
+                    self.rope_deltas = (max_pos + 1 - input_ids.shape[1]).to(dtype=position_ids.dtype, device=position_ids.device).unsqueeze(1)
+                    cache_position = None  # let the decoder recompute based on the new prompt length
+
                 inputs_embeds = self.model.embed_tokens(input_ids)
                 image_mask = (input_ids == self.config.image_token_id).unsqueeze(-1).expand_as(inputs_embeds)
                 image_mask = image_mask.to(inputs_embeds.device)
@@ -346,6 +518,12 @@ class Qwen2_5_VLForConditionalGeneration_X(Qwen2_5_VLForConditionalGeneration):
                 cache_position=cache_position,
                 output_masks=output_masks
             )
+            # Phase-B (LLM-layer) pruning may further change the effective prompt length, so refresh rope_deltas
+            # from the decoder if it provided an updated value.
+            maybe_deltas = getattr(self.model, "_vscan_rope_deltas", None)
+            if maybe_deltas is not None:
+                self.rope_deltas = maybe_deltas
+                self.model._vscan_rope_deltas = None
         else:
             logits, outputs = self.llm_forward(
                 input_ids=None,
@@ -466,7 +644,7 @@ class Qwen2_5_VisionTransformerPretrainedModel_X(Qwen2_5_VisionTransformerPretra
                     hidden_states, attn_weights_global = blk(hidden_states, cu_seqlens=cu_seqlens_now, position_embeddings=position_embeddings, output_attentions=output_attentions)
                     attn_weights_all.append(attn_weights_global)
                 else:
-                    hidden_states, _ = blk(hidden_states, cu_seqlens=cu_seqlens_now, position_embeddings=position_embeddings, output_attentions=output_attentions)
+                    hidden_states, _ = blk(hidden_states, cu_seqlens=cu_seqlens_now, position_embeddings=position_embeddings, output_attentions=False)
 
         if output_attentions:
             # Sum across heads
@@ -570,7 +748,7 @@ class Qwen2_5_VLVisionFlashAttention2_X(nn.Module):
             head_dim = q.size(-1)
             attn_weights = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(head_dim)
             attn_weights = attn_weights + attention_mask_X
-            attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(q.dtype)
+            attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1)
         return attn_output, attn_weights
 
 class Qwen2_5_VLVisionSdpaAttention_X(nn.Module):
@@ -680,6 +858,7 @@ class Qwen2_5_VLModel_X(Qwen2_5_VLModel):
         elif position_ids.dim() == 2:
             position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)
 
+        attention_mask_2d = attention_mask
         causal_mask = self._update_causal_mask(
             attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
         )
@@ -694,7 +873,12 @@ class Qwen2_5_VLModel_X(Qwen2_5_VLModel):
         all_self_attns = () if output_attentions else None
         next_decoder_cache = None
         
-        cur_image_tokens = self.n_image_tokens
+        # Prompt-time image bookkeeping (set in `Qwen2_5_VLForConditionalGeneration_X.forward`)
+        # - `image_token_mask`: [bs, seq_len] bool
+        # - `image_lens_list`: List[List[int]] per-sample per-image lens (sum matches image_token_mask count)
+        image_token_mask = getattr(self, "image_token_mask", None)
+        image_lens_list = getattr(self, "image_lens_list", None)
+        has_images = bool(image_token_mask is not None and int(image_token_mask.sum().item()) > 0)
         
         sum_visual_attention = []
         # 28 x Qwen2_5_VLDecoderLayer
@@ -742,12 +926,11 @@ class Qwen2_5_VLModel_X(Qwen2_5_VLModel):
             rank_layer = layer_idx + 1
             if rank_layer in self.layer_list:
                 if hidden_states.shape[1] != 1:  # prefill stage
-                    if cur_image_tokens > 0:
+                    if has_images:
                         stage = self.layer_list.index(rank_layer) # determine current stage
-                        next_image_tokens = int(image_token_ratio_list[stage] * cur_image_tokens)
                         (
                             position_ids,
-                            attention_mask,
+                            attention_mask_2d,
                             hidden_states,
                             sum_visual,
                             top_rank_index_x
@@ -756,16 +939,32 @@ class Qwen2_5_VLModel_X(Qwen2_5_VLModel):
                             rank_layer=rank_layer,
                             features=hidden_states,  
                             position_ids=position_ids,
-                            attention_mask=causal_mask,
+                            attention_mask=attention_mask_2d,
                             position_embeddings=position_embeddings,
-                            cur_image_tokens=cur_image_tokens,
-                            next_image_tokens=next_image_tokens,
+                            stage_ratio=float(image_token_ratio_list[stage]),
+                            past_key_values=past_key_values,
+                        )
+                        # Update cached prompt state for generation (used by `prepare_inputs_for_generation`)
+                        self._vscan_prefill_attention_mask = attention_mask_2d
+                        self._vscan_prefill_seq_len = int(attention_mask_2d.shape[1])
+
+                        # Refresh causal mask / RoPE for subsequent layers after sequence shortening.
+                        cache_position = torch.arange(hidden_states.shape[1], device=hidden_states.device)
+                        causal_mask = self._update_causal_mask(
+                            attention_mask_2d, hidden_states, cache_position, None, output_attentions
                         )
                         position_embeddings = self.rotary_emb(hidden_states, position_ids)
-                        cur_image_tokens = next_image_tokens
 
                         if output_masks:
-                            self.image_token_bool_masks.append(self._make_mask(self.keep_indices, top_rank_index_x, self.image_grid_thw[:, 1:] // 2))
+                            if (
+                                top_rank_index_x is not None
+                                and getattr(self, "keep_indices", None) is not None
+                                and getattr(self, "image_grid_thw", None) is not None
+                                and hidden_states.shape[0] == 1
+                            ):
+                                self.image_token_bool_masks.append(
+                                    self._make_mask(self.keep_indices, top_rank_index_x, self.image_grid_thw[:, 1:] // 2)
+                                )
                         # print(cur_image_tokens)
                         # sum_visual_attention.append(sum_visual)
 
@@ -815,29 +1014,32 @@ class Qwen2_5_VLModel_X(Qwen2_5_VLModel):
         
         
     def layer_prune(
-        self, cur_num, rank_layer, features, position_ids, attention_mask, position_embeddings, cur_image_tokens, next_image_tokens
+        self,
+        cur_num,
+        rank_layer,
+        features,
+        position_ids,
+        attention_mask,
+        position_embeddings,
+        stage_ratio: float,
+        past_key_values=None,
     ):
+        if rank_layer >= len(self.layers):
+            return position_ids, attention_mask, features, None, None
 
-        _position_ids = position_ids
-        _attention_mask = attention_mask
-        
-        # print(features.shape) # [1, 357, 3584]
-        # print(position_ids.shape) # [3, 1, 357]
-        # print(attention_mask) # [1, 357, 3584]
-        
-        batch_size = features.shape[0] # 1
-        seq_len = position_ids.shape[2] # 357
-            
-        hidden_states = features.clone().detach()
+        image_token_mask = getattr(self, "image_token_mask", None)
+        image_lens_list = getattr(self, "image_lens_list", None)
+        if image_token_mask is None or image_lens_list is None:
+            return position_ids, attention_mask, features, None, None
+
+        batch_size, seq_len, _ = features.shape
+
+        # Use the next layer's attention projections to score image tokens (original implementation behavior).
         self_attn = self.layers[rank_layer].self_attn
-        hidden_states = self.layers[rank_layer].input_layernorm(hidden_states)
-        
-        num_heads = self_attn.num_heads # 28
-        num_key_value_heads = self_attn.num_key_value_heads # 4
-        head_dim = self_attn.head_dim # 128
-        
-        bsz, q_len, _ = hidden_states.size()
+        hidden_states = self.layers[rank_layer].input_layernorm(features)
 
+        head_dim = self_attn.head_dim
+        bsz, q_len, _ = hidden_states.size()
         query_states = self_attn.q_proj(hidden_states)
         key_states = self_attn.k_proj(hidden_states)
         value_states = self_attn.v_proj(hidden_states)
@@ -846,69 +1048,125 @@ class Qwen2_5_VLModel_X(Qwen2_5_VLModel):
         key_states = key_states.view(bsz, q_len, -1, head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, -1, head_dim).transpose(1, 2)
 
-        # cos, sin = position_embeddings
-        # query_states, key_states = apply_multimodal_rotary_pos_emb(
-        #     query_states, key_states, cos, sin, self_attn.rope_scaling["mrope_section"]
-        # )
-
-        # repeat k/v heads if n_kv_heads < n_heads
         key_states = repeat_kv(key_states, self_attn.num_key_value_groups)
         value_states = repeat_kv(value_states, self_attn.num_key_value_groups)
-        
-        # obtain current states
-        cur_key_states = key_states[0]
-        cur_query_states = query_states[0]
-        
-        text_query_states = cur_query_states[:, seq_len - 1, :].unsqueeze(1)
-        image_start_index = self.image_start_index
-        image_end_index = image_start_index + cur_image_tokens
 
-        attn_weights = torch.matmul(text_query_states, cur_key_states.transpose(1, 2)) / math.sqrt(head_dim)
-
-        # Fix precision issues in Qwen2-VL float16 inference
-        # Replace inf values with zeros in attention weights to prevent NaN propagation
+        # Attention from the last token to all tokens.
+        text_query_states = query_states[:, :, -1:, :]  # [bs, heads, 1, head_dim]
+        attn_weights = torch.matmul(text_query_states, key_states.transpose(2, 3)) / math.sqrt(head_dim)  # [bs, heads, 1, seq]
         if text_query_states.dtype == torch.float16:
             attn_weights = torch.where(torch.isinf(attn_weights), torch.zeros_like(attn_weights), attn_weights)
-
-        # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        
-        sum_visual = torch.sum(attn_weights[:, :, image_start_index:image_end_index], dim=-1)
-        sum_visual = sum_visual.squeeze(1) # (32)
-        sum_visual, indices = torch.sort(sum_visual, descending=True) # (32)
-        # print(rank_layer)
-        # print(sum_visual)
-        # print(attn_weights.shape) # [28, 1, 357]
-        attention_avg_head = torch.mean(attn_weights, dim=0) # avg across heads
-        attention_avg_head = attention_avg_head[:,image_start_index:image_end_index] # select image token as keys
-        attention_avg_text = torch.mean(attention_avg_head, dim=0) # (576)
-        
-        # rank and drop by attention score
-        top_rank_index = attention_avg_text.topk(next_image_tokens).indices
-        top_rank_index_x = top_rank_index.clone()
-        
-        image_start_index = image_start_index.to(top_rank_index.device)
-        top_rank_index = top_rank_index + image_start_index
-        top_rank_index = top_rank_index.sort().values
-        
 
+        # Average across heads -> [bs, seq]
+        attn_scores = attn_weights.mean(dim=1).squeeze(1)
 
-        start_index = image_end_index
-        new_input_embeds = torch.cat([features[0, :image_start_index, :], features[0,top_rank_index, :], features[0, start_index:, :]], dim=0)
-        new_input_embeds = new_input_embeds.unsqueeze(0)
-        top_rank_index = top_rank_index.to(position_ids.device)
-        start_index = start_index.to(position_ids.device)
-        new_position_ids = torch.cat([position_ids[:, :, :image_start_index], position_ids[:, :,top_rank_index], position_ids[:, :, start_index:]], dim=2)
-        
-        # print(new_input_embeds.shape)
-        # print(new_position_ids.shape)
-        # print(n_image_tokens)
-        # print(int(n_keep_ratio * n_image_tokens))
+        # Build per-sample keep indices (keep all non-image tokens; prune image tokens per-image by stage_ratio).
+        keep_indices_rows: List[torch.Tensor] = []
+        new_image_lens_list: List[List[int]] = []
+        new_image_token_mask_rows: List[torch.Tensor] = []
+        new_features_rows: List[torch.Tensor] = []
+        new_position_rows: List[torch.Tensor] = []
+        new_attn_rows: List[torch.Tensor] = []
+        max_new_len = 0
+        top_rank_index_x = None  # kept for bs=1/single-image mask export
 
-        if _position_ids is None:
-            position_ids = None
-        
-        return new_position_ids, attention_mask, new_input_embeds, sum_visual, top_rank_index_x
+        for b in range(batch_size):
+            img_pos = torch.nonzero(image_token_mask[b], as_tuple=False).squeeze(1)
+            lens_b = list(image_lens_list[b])
+            if sum(lens_b) != int(img_pos.numel()):
+                # Fallback: treat as a single image span.
+                lens_b = [int(img_pos.numel())] if int(img_pos.numel()) > 0 else []
+
+            keep_mask_b = ~image_token_mask[b]
+            new_lens_b: List[int] = []
+            pos_offset = 0
+            per_image_kept_rel: List[torch.Tensor] = []
+
+            for l in lens_b:
+                if l <= 0:
+                    new_lens_b.append(0)
+                    continue
+                seg_pos = img_pos[pos_offset : pos_offset + l]
+                pos_offset += l
+
+                seg_scores = attn_scores[b, seg_pos]
+                keep_l = int(stage_ratio * l)
+                keep_l = max(1, min(keep_l, l))
+                kept_rel = seg_scores.topk(keep_l).indices
+                kept_rel = torch.sort(kept_rel).values  # keep original order
+                keep_mask_b[seg_pos[kept_rel]] = True
+                new_lens_b.append(keep_l)
+                per_image_kept_rel.append(kept_rel)
+
+            keep_idx_b = torch.nonzero(keep_mask_b, as_tuple=False).squeeze(1)
+
+            # Save a bs=1/single-image compatible index for mask export.
+            if batch_size == 1 and len(lens_b) == 1 and len(per_image_kept_rel) == 1:
+                top_rank_index_x = per_image_kept_rel[0]
+
+            keep_indices_rows.append(keep_idx_b)
+            new_image_lens_list.append(new_lens_b)
+            new_image_token_mask_rows.append(image_token_mask[b][keep_idx_b])
+            new_features_rows.append(features[b][keep_idx_b])
+            new_position_rows.append(position_ids[:, b, keep_idx_b])
+            if attention_mask is None:
+                new_attn_rows.append(torch.ones_like(keep_idx_b, dtype=torch.long, device=keep_idx_b.device))
+            else:
+                new_attn_rows.append(attention_mask[b][keep_idx_b])
+            max_new_len = max(max_new_len, int(keep_idx_b.numel()))
+
+        # Left-pad to a rectangular batch.
+        new_features = features.new_zeros((batch_size, max_new_len, features.shape[-1]))
+        new_position_ids = position_ids.new_zeros((position_ids.shape[0], batch_size, max_new_len))
+        new_attention_mask = new_attn_rows[0].new_zeros((batch_size, max_new_len))
+        new_image_token_mask = image_token_mask.new_zeros((batch_size, max_new_len))
+
+        # Indices for cache gather: [bs, max_new_len] with left padding filled by 0.
+        gather_indices = torch.zeros((batch_size, max_new_len), device=features.device, dtype=torch.long)
+        for b in range(batch_size):
+            keep_idx_b = keep_indices_rows[b].to(dtype=torch.long, device=features.device)
+            cur_len = int(keep_idx_b.numel())
+            pad_left = max_new_len - cur_len
+            if cur_len > 0:
+                new_features[b, pad_left:] = new_features_rows[b]
+                new_position_ids[:, b, pad_left:] = new_position_rows[b]
+                new_attention_mask[b, pad_left:] = new_attn_rows[b]
+                new_image_token_mask[b, pad_left:] = new_image_token_mask_rows[b]
+                gather_indices[b, pad_left:] = keep_idx_b
+
+        # Update cached K/V for already-processed layers so all layers share the same (pruned) prompt length.
+        if past_key_values is not None and hasattr(past_key_values, "key_cache"):
+            # Layers < rank_layer have already been run (we prune caches for them).
+            prune_layers = min(int(rank_layer), len(past_key_values.key_cache))
+            for layer_idx in range(prune_layers):
+                if layer_idx >= len(past_key_values.key_cache):
+                    break
+                key_cache = past_key_values.key_cache[layer_idx]
+                value_cache = past_key_values.value_cache[layer_idx]
+                if key_cache is None or (hasattr(key_cache, "numel") and key_cache.numel() == 0):
+                    continue
+                # key_cache: [bs, heads, seq, head_dim]
+                idx = gather_indices.view(batch_size, 1, max_new_len, 1).expand(
+                    batch_size, key_cache.shape[1], max_new_len, key_cache.shape[3]
+                )
+                past_key_values.key_cache[layer_idx] = torch.gather(key_cache, dim=2, index=idx)
+                past_key_values.value_cache[layer_idx] = torch.gather(value_cache, dim=2, index=idx)
+            if hasattr(past_key_values, "_seen_tokens"):
+                past_key_values._seen_tokens = max_new_len
+
+        # Update model state for later pruning / generation.
+        self.image_token_mask = new_image_token_mask
+        self.image_lens_list = new_image_lens_list
+        self.n_image_tokens = int(new_image_token_mask.sum().item())
+        # Provide updated rope deltas to the outer conditional generation module.
+        # `get_rope_index` defines deltas as: max_position_id + 1 - seq_len.
+        max_pos = new_position_ids.max(dim=0).values.max(dim=-1).values  # [batch]
+        self._vscan_rope_deltas = (max_pos + 1 - max_new_len).to(
+            dtype=new_position_ids.dtype, device=new_position_ids.device
+        ).unsqueeze(1)
+
+        return new_position_ids, new_attention_mask, new_features, None, top_rank_index_x
 
 class Qwen2_5_VLDecoderLayer(nn.Module):
     def forward(

@@ -33,6 +33,7 @@
 </p>
 
 ## 目录
+- [目录](#目录)
 - [✨ 主要特性](#-主要特性)
 - [🚀 最新动态](#-最新动态)
 - [🖼️ 框架概览](#️-框架概览)
@@ -40,11 +41,18 @@
 - [✅ 功能路线图](#-功能路线图)
 - [🛠️ 安装指南](#️-安装指南)
 - [📦 模型与数据](#-模型与数据)
+  - [模型下载](#模型下载)
+  - [数据准备](#数据准备)
 - [▶️ 如何使用](#️-如何使用)
   - [本地 Demo](#本地-demo)
   - [推理](#推理)
   - [评估](#评估)
+    - [Free-form VQA](#free-form-vqa)
+    - [Short-form VQA](#short-form-vqa)
+    - [Efficiency](#efficiency)
   - [训练](#训练)
+    - [训练 GlimpsePrune](#训练-glimpseprune)
+    - [训练 GlimpsePrune+ (可选)](#训练-glimpseprune-可选)
 - [🙏 致谢](#-致谢)
 - [🖊️ 引用](#️-引用)
 - [📧 联系我们](#-联系我们)
@@ -87,6 +95,11 @@ GlimpsePrune 的核心思想是引入一个**glimpse token**和一个轻量级�
   <img src="assets/shortform_results.png" width="90%">
 </p>
 
+<p align="center">
+  <b>V* 自由问答效率对比（batch size=4）</b><br>
+  <img src="assets/efficiency.png" width="90%">
+</p>
+
 ## ✅ 功能路线图
 
 - [x] 支持 [Qwen2.5-VL](https://github.com/QwenLM/Qwen2.5-VL)
@@ -95,10 +108,7 @@ GlimpsePrune 的核心思想是引入一个**glimpse token**和一个轻量级�
 - [x] 提供本地 Gradio Demo
 - [x] 支持 [LLaVA-1.5](https://github.com/haotian-liu/LLaVA)
 - [x] 提供多种视觉Token压缩方法在free-form VQA任务上的[评估脚本](scripts) ([PyramidDrop](https://github.com/Cooperx521/PyramidDrop), [VisionZip](https://github.com/dvlab-research/VisionZip), etc.)
-- [ ] 支持批量输入 (Batch Inference)
-- [ ] 支持视频输入
-- [ ] 支持 [LLaVA-NeXt](https://github.com/LLaVA-VL/LLaVA-NeXT)
-- [ ] 提供在线 Demo
+- [x] 支持批量输入 (Batch Inference)
 
 ## 🛠️ 安装指南
 
@@ -191,7 +201,7 @@ python demo_gp.py \
 ### 评估
 我们提供了便捷的评估脚本。
 
-#### Free-form VQA (长文本问答)
+#### Free-form VQA
 ```bash
 # 默认设置 (无保留率限制)
 BASE_MODEL=<base_model> bash scripts/infer_qwen_gp_cot.sh <new_modules_dir>
@@ -200,13 +210,24 @@ BASE_MODEL=<base_model> bash scripts/infer_qwen_gp_cot.sh <new_modules_dir>
 BASE_MODEL=<base_model> MAX_REMAIN_RATIO=0.111 bash scripts/infer_qwen_gp_cot.sh <new_modules_dir>
 ```
 
-#### Short-form VQA (短文本问答)
+#### Short-form VQA
 ```bash
 # 默认设置
 BASE_MODEL=<base_model> bash scripts/eval_qwen_gp.sh <new_modules_dir>
 
 # 设置最大保留率
 BASE_MODEL=<base_model> MAX_REMAIN_RATIO=0.111 bash scripts/eval_qwen_gp.sh <new_modules_dir>
+```
+
+#### Efficiency
+
+```bash
+# 下载 V* 基准
+hf download https://huggingface.co/docs/huggingface_hub/guides/download --repo-type dataset --local-dir datas/vstar_bench
+
+# 在 4096 视觉 token 和 11.1% 保留率下测试 GlimpsePrune。
+TASKS="vstar" BATCH_SIZE_PER_DEVICE=4 WARMUP_ITERS=3 TIME_LOGGER=1 MEMORY_LOGGER=1 FIXED_REMAIN_RATIO=0.111 MAX_PIXELS=3211264 BASE_MODEL=$base_model bash scripts/infer_qwen_gp_cot.sh $new_modules_dir
+
 ```
 
 ### 训练
@@ -247,7 +268,7 @@ bash scripts/train_qwen_gp_plus.sh
 
 如果我们的工作对您有所帮助，请考虑引用我们的论文：
 ```bibtex
-@misc{zeng2025glimpsecompressdynamicvisual,
+@misc{zeng2025glimpseprune,
       title={A Glimpse to Compress: Dynamic Visual Token Pruning for Large Vision-Language Models}, 
       author={Quan-Sheng Zeng and Yunheng Li and Qilong Wang and Peng-Tao Jiang and Zuxuan Wu and Ming-Ming Cheng and Qibin Hou},
       year={2025},
@@ -261,4 +282,3 @@ bash scripts/train_qwen_gp_plus.sh
 ## 📧 联系我们
 
 如有任何技术问题或学术合作，欢迎通过邮件联系我们： `qszeng[AT]mail.nankai.edu.cn`
-

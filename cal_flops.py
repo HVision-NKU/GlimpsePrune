@@ -349,7 +349,9 @@ def main():
     avg_qwen2_5_gp_prefilling_flops = 0
     avg_qwen2_5_gp_decoding_flops = 0
     avg_input_seq_len = 0
+    avg_visual_seq_len = 0
     avg_remain_input_seq_len = 0
+    avg_remain_visual_seq_len = 0
     avg_gen_seq_len = 0
     n = 0
     
@@ -438,7 +440,9 @@ def main():
         avg_qwen2_5_gp_prefilling_flops += (qwen2_5_gp_prefilling_flops_value - avg_qwen2_5_gp_prefilling_flops) / n
         avg_qwen2_5_gp_decoding_flops += (qwen2_5_gp_decoding_flops_value - avg_qwen2_5_gp_decoding_flops) / n
         avg_input_seq_len += (input_seq_len - avg_input_seq_len) / n
+        avg_visual_seq_len += (visual_seq_len - avg_visual_seq_len) / n
         avg_remain_input_seq_len += (remain_input_seq_len - avg_remain_input_seq_len) / n
+        avg_remain_visual_seq_len += (remain_visual_seq_len - avg_remain_visual_seq_len) / n
         avg_gen_seq_len += (gen_seq_len - avg_gen_seq_len) / n
 
         print("=============================================")
@@ -456,6 +460,8 @@ def main():
     print(f"Average Qwen2.5 GP Decoding FLOPs: {_format_flops(avg_qwen2_5_gp_decoding_flops)}")
     print(f"Average input seq len: {avg_input_seq_len}")
     print(f"Average remain input seq len: {avg_remain_input_seq_len}")
+    print(f"Average visual seq len: {avg_visual_seq_len}")
+    print(f"Average remain visual seq len: {avg_remain_visual_seq_len}")
     print(f"Average generate seq len: {avg_gen_seq_len}")
 
 if __name__ == "__main__":

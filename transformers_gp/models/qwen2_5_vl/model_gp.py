@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import os
 import math
-import copy
+from collections import OrderedDict
 
 import matplotlib.pyplot as plt
 
@@ -44,8 +44,8 @@ from transformers.activations import ACT2FN
 
 from transformers.modeling_flash_attention_utils import (
     _flash_attention_forward,
-    flash_attn_varlen_func,
 )
+from flash_attn import flash_attn_varlen_func
     
 from .configuration import *
 from transformers.modeling_outputs import ModelOutput   
@@ -873,6 +873,8 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.rope_deltas = None  # cache rope_deltas here
+        
+
         self.reset_image_tokens_cache()
         self._init_new_modules(config)
         self.post_init()
@@ -999,28 +1001,50 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
                                 nn.init.xavier_uniform_(param)
                             elif 'bias' in p_name:
                                 nn.init.zeros_(param)
-                        
     
-    def save_new_modules(self, save_directory):
+    def _extract_new_states(self, is_deepspeed_zero3):
+        new_states = {}
+        for name, module in self.new_modules_to_be_saved().items():
+            if isinstance(module, nn.Parameter):
+                new_states[name] = module.data
+            else:
+                new_states[name] = module.state_dict()
+        for name, module in self.new_modules_to_be_loaded().items():
+            if isinstance(module, nn.Parameter):
+                new_states[name] = module.data
+            else:
+                new_states[name] = module.state_dict()
+        return new_states
+    
+    def save_new_modules(self, save_directory, state_dict=None):
         #save config
         self.config.save_pretrained(save_directory)
-        
-        # save the new modules
-        is_main_process = int(os.getenv("LOCAL_RANK", "0")) == 0
-        if is_main_process:
+        # rank = int(os.getenv("LOCAL_RANK", "0"))
+        # is_main_process = rank == 0  # self.args.should_save also ensure this
+        # print(f"===Rank[{rank}===]")  # Why rank1 not entered?
+        if state_dict is None:
             new_states = {}
-            for name, module in self.new_modules_to_be_saved().items():
-                if isinstance(module, nn.Parameter):
-                    new_states[name] = module.data
-                else:
-                    new_states[name] = module.state_dict()
-            for name, module in self.new_modules_to_be_loaded().items():
-                if isinstance(module, nn.Parameter):
-                    new_states[name] = module.data
-                else:
-                    new_states[name] = module.state_dict()
-            torch.save(new_states, os.path.join(save_directory, "new_modules_gp.pt"))
-            print(f"new_modules of {self.__class__.__name__} saved to {os.path.join(save_directory, 'new_modules_gp.pt')}")
+            for fname in [self.new_modules_to_be_saved, self.new_modules_to_be_loaded]:
+                for name, module in fname().items():
+                    if isinstance(module, nn.Parameter):
+                        new_states[name] = module.data
+                    else:
+                        new_states[name] = module.state_dict()
+        else:
+            new_states = {}
+            for fname in [self.new_modules_to_be_saved, self.new_modules_to_be_loaded]:
+                for name, module in fname().items():
+                    if isinstance(module, nn.Parameter):
+                        new_states[name] = state_dict[name]
+                    else:
+                        module_keys = module.state_dict().keys()
+                        new_states[name] = OrderedDict([
+                            (k, state_dict[f"{name}.{k}"]) for k in module_keys
+                        ])
+                
+        torch.save(new_states, os.path.join(save_directory, "new_modules_gp.pt"))
+        print(f"new_modules of {self.__class__.__name__} saved to {os.path.join(save_directory, 'new_modules_gp.pt')}")
+        
     
     
     def load_new_modules(self, load_directory):
@@ -1564,55 +1588,143 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
     
     def _get_remain_masks(self, input_ids, attention_mask, image_token_mask_logits, attn_grid):
         threshold = self.config.reduce_threshold
-        anchor_positions = list(self.config.anchor_positions) if self.config.anchor_positions is not None else []
         min_remain_num = self.config.min_remain_num
         max_remain_ratio = self.config.max_remain_ratio
+        fixed_remain_ratio = self.config.fixed_remain_ratio
         
-        # image_token_lengths = [logits.shape[1] for logits in image_token_mask_logits]
         image_token_bool_masks = []
-        
-        for b, one_logits in enumerate(image_token_mask_logits):
-            one_image_token_prob = one_logits[-1].sigmoid()
-            one_image_token_bool_mask = one_image_token_prob > threshold
-            
+
+        def _get_contiguous_run_lengths(mask_1d: torch.Tensor) -> List[int]:
+            idx = torch.nonzero(mask_1d, as_tuple=False).flatten()
+            if idx.numel() == 0:
+                return []
+            if idx.numel() == 1:
+                return [1]
+            diffs = idx[1:] - idx[:-1]
+            cut_points = torch.nonzero(diffs != 1, as_tuple=False).flatten() + 1
+            cuts = torch.cat(
+                [
+                    torch.zeros(1, dtype=cut_points.dtype, device=cut_points.device),
+                    cut_points,
+                    torch.tensor([idx.numel()], dtype=cut_points.dtype, device=cut_points.device),
+                ],
+                dim=0,
+            )
+            lengths = (cuts[1:] - cuts[:-1]).tolist()
+            return [int(x) for x in lengths]
+
+        def _apply_constraints(one_prob: torch.Tensor) -> torch.Tensor:
+            one_prob = one_prob.flatten()
+            if one_prob.numel() == 0:
+                return torch.zeros_like(one_prob, dtype=torch.bool)
+
+            if fixed_remain_ratio is not None:
+                num_tokens = one_prob.numel()
+                fixed_remain_num = int(float(fixed_remain_ratio) * num_tokens)
+                fixed_remain_num = max(1, min(num_tokens, fixed_remain_num))
+                topk_idx = torch.topk(one_prob, fixed_remain_num, dim=-1).indices
+                mask = torch.zeros_like(one_prob, dtype=torch.bool)
+                mask[topk_idx] = True
+                return mask
+
+            mask = one_prob > threshold
+
             if max_remain_ratio is not None:
-                remain_num = one_image_token_bool_mask.sum().item()
-                remain_ratio = remain_num / one_image_token_bool_mask.numel()
+                remain_num = int(mask.sum().item())
+                if mask.numel() > 0:
+                    remain_ratio = remain_num / mask.numel()
+                else:
+                    remain_ratio = 0.0
                 if remain_ratio > max_remain_ratio:
-                    max_remain_num = int(max_remain_ratio * one_image_token_bool_mask.numel())
-                    one_image_token_bool_indices = torch.topk(one_image_token_prob, max_remain_num, dim=-1).indices
-                    one_image_token_bool_mask.zero_()
-                    one_image_token_bool_mask[one_image_token_bool_indices] = True
-            
+                    max_remain_num = int(max_remain_ratio * mask.numel())
+                    max_remain_num = max(1, min(mask.numel(), max_remain_num))
+                    topk_idx = torch.topk(one_prob, max_remain_num, dim=-1).indices
+                    mask.zero_()
+                    mask[topk_idx] = True
+
             if min_remain_num is not None:
-                remain_num = one_image_token_bool_mask.sum().item()
+                remain_num = int(mask.sum().item())
                 if remain_num < min_remain_num:
-                    one_image_token_bool_indices = torch.topk(one_image_token_prob, min_remain_num, dim=-1).indices
-                    one_image_token_bool_mask[one_image_token_bool_indices] = True
-            
-            if anchor_positions:
-                if attn_grid.shape[0] != len(image_token_mask_logits):
-                    raise NotImplementedError("anchor positions are not supported when using multi-images input")
-                one_attn_height, one_attn_width = attn_grid[b]
-                for anchor_pos in anchor_positions:
-                    if anchor_pos == 'tl':
-                        one_image_token_bool_mask[0] = True
-                    elif anchor_pos == 'tr':
-                        anchor_pos_id = one_attn_width - 1
-                        one_image_token_bool_mask[anchor_pos_id] = True
-                    elif anchor_pos == 'bl':
-                        anchor_pos_id = (one_attn_height - 1) * one_attn_width
-                        one_image_token_bool_mask[anchor_pos_id] = True
-                    elif anchor_pos == 'br':
-                        anchor_pos_id = one_attn_height * one_attn_width - 1
-                        one_image_token_bool_mask[anchor_pos_id] = True
-                    else:
-                        raise ValueError(f"Unknown anchor position: {anchor_pos}. Supported: tl, tr, bl, br.")
-            
-            image_token_bool_masks.append(one_image_token_bool_mask)
+                    k = max(1, min(mask.numel(), int(min_remain_num)))
+                    topk_idx = torch.topk(one_prob, k, dim=-1).indices
+                    mask[topk_idx] = True
+
+            return mask
+
+        is_image_mask = input_ids == self.config.image_token_id
+        B = input_ids.shape[0]
+        image_block_lengths_by_batch = [_get_contiguous_run_lengths(is_image_mask[b]) for b in range(B)]
+        total_image_blocks = sum(len(one) for one in image_block_lengths_by_batch)
+
+        # `image_token_mask_logits` can be either:
+        # - list(bsz) of [num_layers, num_image_tokens]     (default attention decode)
+        # - list(num_image_blocks) of [1, h*w]              (ref/zero masks; one item per image block)
+
+        def _try_parse_as_by_image():
+            if len(image_token_mask_logits) != total_image_blocks:
+                return None
+            parsed_masks = []
+            img_i = 0
+            for b in range(B):
+                one_masks = []
+                for one_len in image_block_lengths_by_batch[b]:
+                    one_logits = image_token_mask_logits[img_i]
+                    img_i += 1
+                    if one_logits is None:
+                        return None
+                    one_prob = one_logits[-1].sigmoid().flatten()
+                    if one_prob.numel() != one_len:
+                        return None
+                    one_masks.append(_apply_constraints(one_prob))
+                if len(one_masks) == 0:
+                    parsed_masks.append(torch.zeros((0,), dtype=torch.bool, device=input_ids.device))
+                else:
+                    parsed_masks.append(torch.cat(one_masks, dim=0))
+            return parsed_masks
+
+        def _try_parse_as_by_batch():
+            if len(image_token_mask_logits) != B:
+                return None
+            parsed_masks = []
+            for b in range(B):
+                one_logits = image_token_mask_logits[b]
+                block_lengths = image_block_lengths_by_batch[b]
+                expected_numel = sum(block_lengths)
+                if one_logits is None:
+                    if expected_numel != 0:
+                        return None
+                    parsed_masks.append(torch.zeros((0,), dtype=torch.bool, device=input_ids.device))
+                    continue
+                one_prob = one_logits[-1].sigmoid().flatten()
+                if expected_numel != one_prob.numel():
+                    return None
+                st = 0
+                one_masks = []
+                for one_len in block_lengths:
+                    ed = st + one_len
+                    one_masks.append(_apply_constraints(one_prob[st:ed]))
+                    st = ed
+                parsed_masks.append(torch.cat(one_masks, dim=0) if len(one_masks) else torch.zeros_like(one_prob, dtype=torch.bool))
+            return parsed_masks
+
+        parsed_by_batch = _try_parse_as_by_batch()
+        
+        if parsed_by_batch is not None:
+            image_token_bool_masks = parsed_by_batch
+        else:
+            parsed_by_image = _try_parse_as_by_image()
+            if parsed_by_image is not None:
+                image_token_bool_masks = parsed_by_image
+            else:
+                raise ValueError(
+                    "Unable to parse image_token_mask_logits. Expected one of: "
+                    f"list(bsz={B}) with per-sample numel matching image tokens, or "
+                    f"list(num_image_blocks={total_image_blocks}) with per-block numel matching image tokens. "
+                    f"Got len(image_token_mask_logits)={len(image_token_mask_logits)}, "
+                    f"len(attn_grid)={attn_grid.shape[0]}."
+                )
             
         # image_token_bool_masks = torch.cat(image_token_bool_masks, dim=0)
-        is_image_mask = input_ids == self.config.image_token_id
         remain_masks = attention_mask.clone().bool()
         remain_masks[is_image_mask] = torch.cat(image_token_bool_masks, dim=0)
         remain_masks &= attention_mask.bool()  # Ensure remain_masks is still a valid attention mask, usually all image tokens are valid in attention_mask
@@ -1780,6 +1892,8 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
                 hidden_states = layer_outputs[0]
                 if use_cache:
                     past_key_values = layer_outputs[-1]
+
+                
             hidden_states = self.model.norm(hidden_states)
            
         logits = self.lm_head(hidden_states)
@@ -1923,6 +2037,7 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
             cache_position=cache_position,
         )
         hidden_states = outputs[0]
+
         return self.lm_head(hidden_states), outputs
     
     
@@ -2174,33 +2289,64 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
                 new_inputs_embeds = self.model.embed_tokens(input_ids[:, -n:])
                 inputs_embeds = torch.cat((inputs_embeds, new_inputs_embeds), dim=1)
                 
-        # print_rank0(f"input_ids.shape: {input_ids.shape}")
-        # print_rank0(f"inputs_embeds.shape: {inputs_embeds.shape if inputs_embeds is not None else None}")
-        # print_rank0(f"cache_position.shape: {cache_position.shape if cache_position is not None else None}")
-        # print_rank0(f"cache_position[-1]: {cache_position[-1] if cache_position is not None else None}")
-            
-        model_inputs = GenerationMixin.prepare_inputs_for_generation(
-            self,
-            input_ids,
-            past_key_values=past_key_values,
-            attention_mask=attention_mask,
-            inputs_embeds=inputs_embeds,
-            cache_position=cache_position,
-            position_ids=position_ids,
-            pixel_values=pixel_values,
-            pixel_values_videos=pixel_values_videos,
-            image_grid_thw=image_grid_thw,
-            video_grid_thw=video_grid_thw,
-            second_per_grid_ts=second_per_grid_ts,
-            use_cache=use_cache,
-            **kwargs,
-        )
+        # NOTE:
+        # We intentionally do NOT call `GenerationMixin.prepare_inputs_for_generation` here.
+        # For Qwen2.5-VL, `position_ids` can have shape (3, B, L). Some versions of Transformers
+        # incorrectly assume a 2D (B, L) position_ids and mishandle the sequence dimension during
+        # cached generation, leading to wrong position ids / RoPE.
+
+        if attention_mask is None and input_ids is not None:
+            attention_mask = input_ids.new_ones(input_ids.shape, dtype=torch.long)
+
+        if cache_position is None:
+            past_seen_tokens = 0
+            if past_key_values is not None and hasattr(past_key_values, "get_seq_length"):
+                past_seen_tokens = int(past_key_values.get_seq_length() or 0)
+            cache_position = torch.arange(
+                past_seen_tokens, past_seen_tokens + input_ids.shape[1], device=input_ids.device
+            )
+
+        # In cached generation, only pass the last token; keep full attention_mask.
+        past_is_nonempty = False
+        if past_key_values is not None:
+            if hasattr(past_key_values, "get_seq_length"):
+                past_is_nonempty = int(past_key_values.get_seq_length() or 0) > 0
+            else:
+                past_is_nonempty = True
+
+        if past_is_nonempty and isinstance(cache_position, torch.Tensor) and cache_position.numel() > 0:
+            if input_ids is not None and input_ids.shape[1] > 1:
+                input_ids = input_ids[:, -1:]
+                if inputs_embeds is not None and inputs_embeds.shape[1] > 1:
+                    inputs_embeds = inputs_embeds[:, -1:, :]
+                if isinstance(cache_position, torch.Tensor) and cache_position.ndim == 1 and cache_position.numel() > 1:
+                    cache_position = cache_position[-1:]
+                if position_ids is not None and isinstance(position_ids, torch.Tensor):
+                    if position_ids.ndim == 3 and position_ids.shape[-1] > 1:
+                        position_ids = position_ids[..., -1:]
+                    elif position_ids.ndim == 2 and position_ids.shape[-1] > 1:
+                        position_ids = position_ids[:, -1:]
+
+        model_inputs = {
+            "input_ids": input_ids,
+            "past_key_values": past_key_values,
+            "attention_mask": attention_mask,
+            "inputs_embeds": inputs_embeds,
+            "cache_position": cache_position,
+            "position_ids": position_ids,
+            "use_cache": use_cache,
+            "pixel_values": pixel_values,
+            "pixel_values_videos": pixel_values_videos,
+            "image_grid_thw": image_grid_thw,
+            "video_grid_thw": video_grid_thw,
+            "second_per_grid_ts": second_per_grid_ts,
+        }
         
         if self.reduced_input_ids is None:
             # Qwen2-5-VL position_ids are prepared with rope_deltas in forward
             model_inputs["position_ids"] = None
         
-        if cache_position[0] != 0:
+        if isinstance(cache_position, torch.Tensor) and cache_position.numel() > 0 and int(cache_position[0].item()) != 0:
             model_inputs["pixel_values"] = None
             model_inputs["pixel_values_videos"] = None
 

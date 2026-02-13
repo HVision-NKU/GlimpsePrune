@@ -166,6 +166,16 @@ def time_logger_disabled():
 def time_logger_set_active(active: bool):
     return LoggerControl('time', active)
 
+def is_logger_active(logger_name: str) -> bool:
+    """Return whether a logger is active for the current thread."""
+    return _is_logger_globally_active(logger_name)
+
+def time_logger_is_active() -> bool:
+    return is_logger_active('time')
+
+def memory_logger_is_active() -> bool:
+    return is_logger_active('memory')
+
 
 
 def _find_device_from_args(*args, **kwargs) -> Optional[torch.device]:
@@ -313,11 +323,14 @@ def memory_logger(func: Callable) -> Callable:
     call_count: int = 0
     current_max_peak_allocated_mem: float = 0.0
     current_max_reserved_mem: float = 0.0
+    max_peak_allocated_mem_index: Optional[int] = None
+    max_reserved_mem_index: Optional[int] = None
 
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs) -> Any:
         nonlocal call_count, current_max_peak_allocated_mem, current_max_reserved_mem
+        nonlocal max_peak_allocated_mem_index, max_reserved_mem_index
 
         if _is_logger_globally_active('memory'):
             device = _find_device_from_args(*args, **kwargs)
@@ -338,12 +351,17 @@ def memory_logger(func: Callable) -> Callable:
                 torch.cuda.synchronize(device)  # Ensure all operations are completed
                 # 2. Get the peak memory usage (bytes) since the reset
                 peak_bytes = torch.cuda.max_memory_allocated(device)
-                reserved_bytes = torch.cuda.memory_reserved(device)
+                reserved_bytes = torch.cuda.max_memory_reserved(device)
                 
                 # 3. Update the statistics
                 call_count += 1
-                current_max_peak_allocated_mem = max(current_max_peak_allocated_mem, peak_bytes)
-                current_max_reserved_mem = max(current_max_reserved_mem, reserved_bytes)
+                if peak_bytes > current_max_peak_allocated_mem:
+                    current_max_peak_allocated_mem = peak_bytes
+                    max_peak_allocated_mem_index = call_count
+
+                if reserved_bytes > current_max_reserved_mem:
+                    current_max_reserved_mem = reserved_bytes
+                    max_reserved_mem_index = call_count
 
         else:
             return func(*args, **kwargs)
@@ -353,6 +371,12 @@ def memory_logger(func: Callable) -> Callable:
         Returns the maximum peak memory allocated in bytes across all calls.
         """
         return current_max_peak_allocated_mem
+
+    def get_max_peak_allocated_memory_index() -> Optional[int]:
+        """
+        Returns the (1-based) call index at which the max peak allocated memory occurred.
+        """
+        return max_peak_allocated_mem_index
     
     def get_max_reserved_memory() -> float:
         """
@@ -360,21 +384,32 @@ def memory_logger(func: Callable) -> Callable:
         """
         return current_max_reserved_mem
 
+    def get_max_reserved_memory_index() -> Optional[int]:
+        """
+        Returns the (1-based) call index at which the max reserved memory occurred.
+        """
+        return max_reserved_mem_index
+
     def get_call_count() -> int:
         return call_count
 
     def reset_stats():
         """Resets the statistics for this specific memory logger."""
         nonlocal call_count, current_max_peak_allocated_mem, current_max_reserved_mem
+        nonlocal max_peak_allocated_mem_index, max_reserved_mem_index
         call_count = 0
         current_max_peak_allocated_mem = 0.0
         current_max_reserved_mem = 0.0
+        max_peak_allocated_mem_index = None
+        max_reserved_mem_index = None
         torch.cuda.empty_cache()
         gc.collect()
         
 
     wrapper.get_max_peak_allocated_memory = get_max_peak_allocated_memory
+    wrapper.get_max_peak_allocated_memory_index = get_max_peak_allocated_memory_index
     wrapper.get_max_reserved_memory = get_max_reserved_memory
+    wrapper.get_max_reserved_memory_index = get_max_reserved_memory_index
     wrapper.get_call_count = get_call_count
     wrapper.reset_stats = reset_stats
     wrapper._original_function = func
@@ -426,7 +461,9 @@ def get_all_memory_logger_stats(called_only: bool = False) -> Dict[str, Dict[str
         stats[name] = {
             "call_count": logger_func.get_call_count(),
             "max_peak_allocated_memory": _format_bytes(logger_func.get_max_peak_allocated_memory()),
+            "max_peak_allocated_memory_index": logger_func.get_max_peak_allocated_memory_index(),
             "max_reserved_memory": _format_bytes(logger_func.get_max_reserved_memory()),
+            "max_reserved_memory_index": logger_func.get_max_reserved_memory_index(),
         }
     return stats
 

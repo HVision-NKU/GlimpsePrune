@@ -2,7 +2,31 @@ import os
 import time
 import threading
 import queue
+import argparse
 from utils.client import LLMClient
+
+# ===============================================================
+# 1. 默认配置（可通过命令行参数覆盖）
+# ===============================================================
+
+DEFAULT_API_BASE_URL = "http://localhost:8000/v1"
+DEFAULT_MODEL_NAME = "Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8"
+
+# 总共发起多少个 score() 调用
+DEFAULT_TOTAL_REQUESTS = 50
+
+# 并发数：模拟多少个用户同时请求
+DEFAULT_CONCURRENT_WORKERS = 10
+
+# 批处理大小：每次 score() 调用处理多少条数据
+# 注意：因为你的 score() 内部是循环，这会产生 `ITEMS_PER_REQUEST` 个连续的API请求
+DEFAULT_ITEMS_PER_REQUEST = 4
+
+# 单个API请求的超时时间（秒）
+DEFAULT_REQUEST_TIMEOUT = 30.0
+
+# 默认的“占位”API Key（仅在环境变量和命令行都未提供时使用）
+DEFAULT_DUMMY_API_KEY = "xxx"
 
 # ===============================================================
 # 2. 性能测试逻辑
@@ -15,11 +39,12 @@ def generate_dummy_data(num_items):
     completions = [f"Paris is the capital of France. {i}" for i in range(num_items)]
     return queries, completions, answers
 
+
 def worker(task_queue, client_params, results_queue):
     """线程工作函数：从队列中获取任务并处理。"""
     # 每个线程都获取自己的客户端实例（但由于是单例，它们会共享同一个）
     client = LLMClient(**client_params)
-    
+
     while True:
         try:
             # 从队列获取一个任务，设置超时以避免永久阻塞
@@ -27,57 +52,64 @@ def worker(task_queue, client_params, results_queue):
         except queue.Empty:
             # 队列已空，工作线程可以退出了
             break
-        
+
         query_texts, completion_texts, answer_texts = task_data
-        
+
         # 记录单个请求的开始时间
         req_start_time = time.time()
-        
+
         # 使用 LLMClient 的 score 方法处理任务
         scores = client.score(query_texts, completion_texts, answer_texts)
-        
+
         req_end_time = time.time()
-        
+
         # 将处理结果（延迟时间，处理的项目数）放入结果队列
         latency = req_end_time - req_start_time
         num_items = len(scores)
         results_queue.put((latency, num_items))
-        
+
         # 标记任务完成
         task_queue.task_done()
 
 
-def run_performance_test(base_url, model_name, num_requests, num_workers, batch_size, timeout):
+def run_performance_test(base_url, model_name, num_requests, num_workers, batch_size, timeout, api_key):
     """
     运行性能测试的主函数。
-    
+
     :param base_url: LLM API 的基础URL。
     :param model_name: 要测试的模型名称。
     :param num_requests: 总共要处理的请求（任务）数量。
     :param num_workers: 并发工作线程的数量（模拟并发用户）。
     :param batch_size: 每个请求中包含的数据项数量。
     :param timeout: API请求的超时时间。
+    :param api_key: 传给 LLMClient 的 API Key。
     """
-    print("="*50)
+    print("=" * 50)
     print(f"Starting Performance Test")
     print(f"  Endpoint: {base_url}")
     print(f"  Model: {model_name}")
     print(f"  Concurrency: {num_workers} workers")
     print(f"  Total Requests: {num_requests}")
     print(f"  Items per Request: {batch_size}")
-    print("="*50)
+    print(f"  Timeout per API call: {timeout} s")
+    print("=" * 50)
 
     # 1. 初始化 Client (仅用于预检)
     #    工作线程会自己创建/获取实例
     try:
-        client_params = {"base_url": base_url, "model_name": model_name, "timeout": timeout, "api_key": "dummy"}
+        client_params = {
+            "base_url": base_url,
+            "model_name": model_name,
+            "timeout": timeout,
+            "api_key": api_key,
+        }
         _ = LLMClient(**client_params)
     except Exception as e:
         # 打印我们捕获到的具体异常信息
-        print("\n" + "="*20 + " INITIALIZATION FAILED " + "="*20)
+        print("\n" + "=" * 20 + " INITIALIZATION FAILED " + "=" * 20)
         print(f"An error occurred during the initial client setup: {e}")
         print("The test cannot continue. Please review the error message and check your setup.")
-        print("="*61 + "\n")
+        print("=" * 61 + "\n")
         # 明确地退出
         return
 
@@ -85,7 +117,7 @@ def run_performance_test(base_url, model_name, num_requests, num_workers, batch_
     task_queue = queue.Queue()
     results_queue = queue.Queue()
     total_items_to_process = num_requests * batch_size
-    
+
     print(f"Generating {total_items_to_process} dummy data items and queuing {num_requests} tasks...")
     for _ in range(num_requests):
         q, c, a = generate_dummy_data(batch_size)
@@ -94,7 +126,7 @@ def run_performance_test(base_url, model_name, num_requests, num_workers, batch_
 
     # 3. 创建并启动工作线程
     threads = []
-    
+
     print(f"\nStarting {num_workers} worker threads...")
     for _ in range(num_workers):
         thread = threading.Thread(target=worker, args=(task_queue, client_params, results_queue))
@@ -103,16 +135,16 @@ def run_performance_test(base_url, model_name, num_requests, num_workers, batch_
 
     # 4. 记录总体开始时间并等待所有任务完成
     total_start_time = time.time()
-    task_queue.join() # 阻塞直到队列中的所有任务都被 task_done()
+    task_queue.join()  # 阻塞直到队列中的所有任务都被 task_done()
     total_end_time = time.time()
 
     # 5. 等待所有线程真正终止
     for thread in threads:
         thread.join()
-        
+
     # 6. 收集并计算结果
     total_time = total_end_time - total_start_time
-    
+
     latencies = []
     total_items_processed = 0
     while not results_queue.empty():
@@ -128,15 +160,15 @@ def run_performance_test(base_url, model_name, num_requests, num_workers, batch_
 
     avg_latency_per_request = sum(latencies) / len(latencies)
     throughput_rps = num_requests / total_time  # Requests per second (RPS)
-    
+
     # 你的 score 方法是串行的，所以每个 item 都会产生一个 API 调用
     # 因此 "Items per second" 实际上等于 "API calls per second"
-    throughput_api_calls_ps = total_items_processed / total_time 
+    throughput_api_calls_ps = total_items_processed / total_time
     avg_latency_per_api_call = total_time / total_items_processed if total_items_processed > 0 else 0
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("Test Finished!")
-    print("="*50)
+    print("=" * 50)
     print(f"Total time taken: {total_time:.4f} seconds")
     print(f"Total requests processed: {len(latencies)} / {num_requests}")
     print(f"Total API calls made (items scored): {total_items_processed}")
@@ -145,45 +177,86 @@ def run_performance_test(base_url, model_name, num_requests, num_workers, batch_
     print(f"Throughput (API calls/sec): {throughput_api_calls_ps:.4f} calls/sec")
     print(f"Avg. Latency per Request (batch): {avg_latency_per_request:.4f} seconds")
     print(f"Avg. Latency per API call (item): {avg_latency_per_api_call:.4f} seconds")
-    print("="*50)
+    print("=" * 50)
 
 
 # ===============================================================
-# 3. 运行测试
+# 3. 运行测试（命令行入口）
 # ===============================================================
 if __name__ == "__main__":
-    # --- 可配置的测试参数 ---
-    if "OPENAI_API_KEY" not in os.environ:
-        os.environ["OPENAI_API_KEY"] = "xxx"    
-    
-    # 你的LLM API服务地址
-    API_BASE_URL = "http://localhost:8000/v1"
-    
-    # 你在服务中加载的模型名称
-    MODEL_NAME = "Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8" # 请替换为你的模型名, 如 "meta-llama/Llama-2-7b-chat-hf"
-    # MODEL_NAME = None
-    
-    # --- 负载配置 ---
-    
-    # 总共发起多少个 score() 调用
-    TOTAL_REQUESTS = 50
-    
-    # 并发数：模拟多少个用户同时请求
-    CONCURRENT_WORKERS = 10
-    
-    # 批处理大小：每次 score() 调用处理多少条数据
-    # 注意：因为你的 score() 内部是循环，这会产生 `ITEMS_PER_REQUEST` 个连续的API请求
-    ITEMS_PER_REQUEST = 4
-    
-    # 单个API请求的超时时间（秒）
-    REQUEST_TIMEOUT = 30.0
-    
-    # 运行测试
+    parser = argparse.ArgumentParser(
+        description="Simple performance tester for an LLM scoring endpoint."
+    )
+    parser.add_argument(
+        "--base-url",
+        "-u",
+        type=str,
+        default=DEFAULT_API_BASE_URL,
+        help=f"LLM API base URL (default: {DEFAULT_API_BASE_URL})",
+    )
+    parser.add_argument(
+        "--model-name",
+        "-m",
+        type=str,
+        default=DEFAULT_MODEL_NAME,
+        help=f"Model name to test (default: {DEFAULT_MODEL_NAME})",
+    )
+    parser.add_argument(
+        "--total-requests",
+        "-n",
+        type=int,
+        default=DEFAULT_TOTAL_REQUESTS,
+        help=f"Total number of score() calls (default: {DEFAULT_TOTAL_REQUESTS})",
+    )
+    parser.add_argument(
+        "--concurrency",
+        "-c",
+        type=int,
+        default=DEFAULT_CONCURRENT_WORKERS,
+        help=f"Number of concurrent worker threads (default: {DEFAULT_CONCURRENT_WORKERS})",
+    )
+    parser.add_argument(
+        "--batch-size",
+        "-b",
+        type=int,
+        default=DEFAULT_ITEMS_PER_REQUEST,
+        help=f"Items per score() call (default: {DEFAULT_ITEMS_PER_REQUEST})",
+    )
+    parser.add_argument(
+        "--timeout",
+        "-t",
+        type=float,
+        default=DEFAULT_REQUEST_TIMEOUT,
+        help=f"Per-API-call timeout in seconds (default: {DEFAULT_REQUEST_TIMEOUT})",
+    )
+    parser.add_argument(
+        "--api-key",
+        type=str,
+        default=None,
+        help=(
+            "API key passed to LLMClient. "
+            "If omitted, will fall back to environment variable OPENAI_API_KEY, "
+            f"or '{DEFAULT_DUMMY_API_KEY}' as a dummy value."
+        ),
+    )
+
+    args = parser.parse_args()
+
+    # 处理 API Key：
+    # 优先级：命令行参数 > 环境变量 > 默认 dummy
+    if args.api_key is not None:
+        os.environ["OPENAI_API_KEY"] = args.api_key
+    elif "OPENAI_API_KEY" not in os.environ:
+        os.environ["OPENAI_API_KEY"] = DEFAULT_DUMMY_API_KEY
+
+    api_key_for_client = os.environ.get("OPENAI_API_KEY", DEFAULT_DUMMY_API_KEY)
+
     run_performance_test(
-        base_url=API_BASE_URL,
-        model_name=MODEL_NAME,
-        num_requests=TOTAL_REQUESTS,
-        num_workers=CONCURRENT_WORKERS,
-        batch_size=ITEMS_PER_REQUEST,
-        timeout=REQUEST_TIMEOUT
+        base_url=args.base_url,
+        model_name=args.model_name,
+        num_requests=args.total_requests,
+        num_workers=args.concurrency,
+        batch_size=args.batch_size,
+        timeout=args.timeout,
+        api_key=api_key_for_client,
     )
