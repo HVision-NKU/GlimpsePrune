@@ -16,6 +16,8 @@ AVAILABLE_MODELS = {
     "qwen2_5_vl_gp": "Qwen2_5_VL_GP",
     "qwen2_5_vl_vscan": "Qwen2_5_VL_VScan",
     "qwen2_5_vl_visionzip": "Qwen2_5_VL_VisionZip",
+    "internvl2_5": "InternVL2_5",
+    "internvl2_5_gp": "InternVL2_5_GP",
 }
 
 

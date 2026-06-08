@@ -1,0 +1,71 @@
+model_name_or_path: OpenGVLab/InternVL2_5-8B
+train_dataset: dataset_configs/gqa_rand.yaml
+loc_loss_class: MaskLoss
+loc_dice_weight: 1.0
+loc_bce_weight: 0.1
+kd_weight: 0.0
+reward_weight: 0.0
+loc_weight: 1.0
+le_weight: 1.0
+
+selected_layers:
+  - 21
+reduce_layer: 21
+use_attention_logits: true
+
+attn_fuse_type: AttnFuserV1
+attn_fuse_size: 256
+visual_cond_size: 512
+attn_fuse_num_heads: 4
+attn_fuse_hidden_act: silu
+attn_fuse_use_flash_attn: true
+ori_attn_supervision: false
+deep_supervision: false
+attn_fuse_global: true
+selected_visual_layers:
+  - -1
+
+
+le_layers:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 15
+  - 16
+  - 17
+  - 18
+  - 19
+  - 20
+
+max_dynamic_patch: 12
+min_dynamic_patch: 1
+use_thumbnail: true
+
+output_dir: output/internvl2_5_8b_gp
+
+bf16: true
+torch_dtype: bfloat16
+attn_implementation: flash_attention_2
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 4
+learning_rate: 1e-4
+num_train_epochs: 1
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+
+remove_unused_columns: false
+logging_steps: 10
+save_steps: 500
+
