@@ -1,14 +1,13 @@
-.sii
-.codex
-qz_*.sh
+tmp
+*.mp4
 slurm_*.sh
 slurm-*.out
 batchscript-*
 phoenix-slurm-*.out
 .nfs*
-tests
-datas
-result
+/tests
+datas/*
+/result
 
 .vscode
 .gradio

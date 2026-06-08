@@ -96,8 +96,9 @@ GlimpsePrune 的核心思想是引入一个**glimpse token**和一个轻量级�
 </p>
 
 <p align="center">
-  <b>V* 自由问答效率对比（batch size=4）</b><br>
-  <img src="assets/efficiency.png" width="90%">
+  <b>批量推理吞吐表现</b><br>
+  <img src="assets/bs_sweep.png" width="90%"><br>
+  <em>在不同 batch size（bs=1→12）下，GlimpsePrune 通过剪除视觉 token，在相同峰值显存下相比 Qwen2.5-VL baseline 保持更高的 prefilling/decoding 吞吐，并可扩展到更大的 batch。</em>
 </p>
 
 ## ✅ 功能路线图
@@ -105,6 +106,8 @@ GlimpsePrune 的核心思想是引入一个**glimpse token**和一个轻量级�
 - [x] 支持 [Qwen2.5-VL](https://github.com/QwenLM/Qwen2.5-VL)
 - [x] 支持单张图像输入
 - [x] 支持多张图像输入
+- [x] 支持视频输入（Qwen2.5-VL）
+- [x] 支持 InternVL2.5
 - [x] 提供本地 Gradio Demo
 - [x] 支持 [LLaVA-1.5](https://github.com/haotian-liu/LLaVA)
 - [x] 提供多种视觉Token压缩方法在free-form VQA任务上的[评估脚本](scripts) ([PyramidDrop](https://github.com/Cooperx521/PyramidDrop), [VisionZip](https://github.com/dvlab-research/VisionZip), etc.)

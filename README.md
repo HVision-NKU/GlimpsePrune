@@ -97,8 +97,9 @@ We evaluated GlimpsePrune on multiple VQA benchmarks. The results show that it a
 </p>
 
 <p align="center">
-  <b>Efficiency comparsion on V* in free form (batch size=4)</b><br>
-  <img src="assets/efficiency.png" width="90%">
+  <b>Throughput under batched inference</b><br>
+  <img src="assets/bs_sweep.png" width="90%"><br>
+  <em>Across batch sizes (bs=1→12), GlimpsePrune prunes visual tokens, so under the same peak GPU memory it sustains substantially higher prefilling/decoding throughput than the Qwen2.5-VL baseline and scales to larger batches.</em>
 </p>
 
 ## ✅ Roadmap
@@ -106,6 +107,8 @@ We evaluated GlimpsePrune on multiple VQA benchmarks. The results show that it a
 - [x] Support for [Qwen2.5-VL](https://github.com/QwenLM/Qwen2.5-VL)
 - [x] Support for single-image input
 - [x] Support for multi-image input
+- [x] Video input support (Qwen2.5-VL)
+- [x] InternVL2.5 support
 - [x] Provide a local Gradio Demo
 - [x] Support for [LLaVA-1.5](https://github.com/haotian-liu/LLaVA)
 - [x] Provide evaluation [scripts](scripts) for various visual token compression methods ([PyramidDrop](https://github.com/Cooperx521/PyramidDrop), [VisionZip](https://github.com/dvlab-research/VisionZip), etc.) on the free-form VQA
