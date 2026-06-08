@@ -1,20 +1,61 @@
-#!/bin/bash
-ngpus=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
+#!/usr/bin/env bash
+set -euo pipefail
 
-# if CUDA_VISIBLE_DEVICES is set, use it
-if [ ! -z $CUDA_VISIBLE_DEVICES ]; then
-    ngpus=$(echo $CUDA_VISIBLE_DEVICES | tr ',' '\n' | wc -l)
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd -- "${script_dir}/.." && pwd)
+
+if [[ -f "${repo_root}/.env" ]]; then
+    # shellcheck disable=SC1091
+    source "${repo_root}/.env" >/dev/null 2>&1
 fi
 
-echo "Number of GPUs: $ngpus"
+count_visible_gpus() {
+    if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+        local count=0
+        local visible_gpus=()
+        IFS=',' read -ra visible_gpus <<< "${CUDA_VISIBLE_DEVICES}"
+        for gpu in "${visible_gpus[@]}"; do
+            if [[ -n "${gpu//[[:space:]]/}" ]]; then
+                count=$((count + 1))
+            fi
+        done
+        echo "$count"
+        return
+    fi
+
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        nvidia-smi --query-gpu=name --format=csv,noheader | wc -l
+        return
+    fi
+
+    echo 0
+}
+
+ngpus=$(count_visible_gpus)
+num_processes=${NUM_PROCESSES:-$ngpus}
+
+if ! [[ "$num_processes" =~ ^[0-9]+$ ]]; then
+    echo "Error: NUM_PROCESSES must be a positive integer, got '$num_processes'."
+    exit 1
+fi
+
+if [[ "$num_processes" -lt 1 ]]; then
+    echo "Error: no visible GPUs found. Set CUDA_VISIBLE_DEVICES or NUM_PROCESSES."
+    exit 1
+fi
+
+echo "Number of visible GPUs: $ngpus"
+echo "Data parallel processes: $num_processes"
 
 export LMMS_EVAL_PLUGINS="my_lmms_eval"
+export DECORD_EOF_RETRY_MAX="${DECORD_EOF_RETRY_MAX:-40960}"
 
-if [ -z "$1" ]; then
+if [[ $# -lt 1 ]]; then
     echo "Usage: $0 <new_modules_dir (e.g., result/xxx)> [adapter_dir]"
     echo "Optional env: TASKS=\"vqav2_val_lite,gqa,...\" to override default task list"
     echo "Optional env: BATCH_SIZE=1 to override default batch size"
     echo "Optional env: MAX_PIXELS=1605632 to override processor max_pixels"
+    echo "Optional env: NUM_PROCESSES=N to override automatic visible GPU count"
     echo "Optional env: RERUN=1 to re-run even if output exists (will delete existing task dir)"
     exit 1
 fi
@@ -25,6 +66,11 @@ adapter_dir=${2:-""}
 base_model=${BASE_MODEL:-"Qwen/Qwen2.5-VL-3B-Instruct"}
 min_remain_num=${MIN_REMAIN_NUM:-""}
 max_remain_ratio=${MAX_REMAIN_RATIO:-""}
+enable_frame_redundancy_merge=${ENABLE_FRAME_REDUNDANCY_MERGE:-0}
+frame_redundancy_pooling_mode=${FRAME_REDUNDANCY_POOLING_MODE:-""}
+frame_redundancy_min_keep_ratio=${FRAME_REDUNDANCY_MIN_KEEP_RATIO:-""}
+frame_redundancy_min_keep_tokens=${FRAME_REDUNDANCY_MIN_KEEP_TOKENS:-""}
+frame_redundancy_similarity_threshold=${FRAME_REDUNDANCY_SIMILARITY_THRESHOLD:-""}
 attn_implementation=${ATTN_IMPL:-"flash_attention_2"}
 adapter_merge=${ADAPTER_MERGE:-1}
 port=${PORT:-29501}
@@ -84,6 +130,31 @@ if [[ -n "$max_remain_ratio" ]]; then
     PATH_SUFFIX="${PATH_SUFFIX}_max_${max_remain_ratio}"
 fi
 
+if [[ $enable_frame_redundancy_merge -eq 1 ]]; then
+    MORE_ARGS="${MORE_ARGS},enable_frame_redundancy_merge=True"
+    PATH_SUFFIX="${PATH_SUFFIX}_frm"
+fi
+
+if [[ -n "$frame_redundancy_pooling_mode" ]]; then
+    MORE_ARGS="${MORE_ARGS},frame_redundancy_pooling_mode=$frame_redundancy_pooling_mode"
+    PATH_SUFFIX="${PATH_SUFFIX}_${frame_redundancy_pooling_mode}"
+fi
+
+if [[ -n "$frame_redundancy_min_keep_ratio" ]]; then
+    MORE_ARGS="${MORE_ARGS},frame_redundancy_min_keep_ratio=$frame_redundancy_min_keep_ratio"
+    PATH_SUFFIX="${PATH_SUFFIX}_frmr-${frame_redundancy_min_keep_ratio}"
+fi
+
+if [[ -n "$frame_redundancy_min_keep_tokens" ]]; then
+    MORE_ARGS="${MORE_ARGS},frame_redundancy_min_keep_tokens=$frame_redundancy_min_keep_tokens"
+    PATH_SUFFIX="${PATH_SUFFIX}_frmt-${frame_redundancy_min_keep_tokens}"
+fi
+
+if [[ -n "$frame_redundancy_similarity_threshold" ]]; then
+    MORE_ARGS="${MORE_ARGS},frame_redundancy_similarity_threshold=$frame_redundancy_similarity_threshold"
+    PATH_SUFFIX="${PATH_SUFFIX}_tau-${frame_redundancy_similarity_threshold}"
+fi
+
 if [[ "$attn_implementation" != "flash_attention_2" ]]; then
     MORE_ARGS="${MORE_ARGS},attn_implementation=$attn_implementation"
     PATH_SUFFIX="${PATH_SUFFIX}_${attn_implementation}"
@@ -97,12 +168,16 @@ if [[ "$max_pixels" != 0 && -n "$max_pixels" ]]; then
 fi
 
 base_output_path=${base_output_path}${PATH_SUFFIX}
+output_root="${repo_root}/${base_output_path}"
 
 echo "Input (new_modules_dir): $new_modules_dir"
 echo "Output (base_output_path): $base_output_path"
+echo "Output root: $output_root"
 echo "More args: $MORE_ARGS"
 echo "Batch size: $batch_size"
 echo "Rerun: $rerun"
+echo "DECORD_EOF_RETRY_MAX: $DECORD_EOF_RETRY_MAX"
+echo "Launch port: $port"
 
 
 eval_list=( \
@@ -131,11 +206,11 @@ fi
 
 for task in "${eval_list[@]}"
 do
-    output_path=${base_output_path}/${task}
+    output_path="${output_root}/${task}"
 
-    if [ -d "$output_path" ]; then
+    if [[ -d "$output_path" ]]; then
         if [[ "$rerun" == "1" ]]; then
-            if [[ -n "$output_path" && "$output_path" == "$base_output_path"/* ]]; then
+            if [[ -n "$output_path" && "$output_path" == "$output_root"/* ]]; then
                 echo "Output path $output_path already exists. RERUN=1, deleting and re-running task: $task"
                 rm -rf -- "$output_path"
             else
@@ -143,17 +218,33 @@ do
                 exit 1
             fi
         else
-        echo "Output path $output_path already exists. Skipping evaluation for task: $task"
-        continue
+            echo "Output path $output_path already exists. Skipping evaluation for task: $task"
+            continue
         fi
     fi
 
+    mkdir -p "${output_path}"
     echo "Evaluating task: $task"
-    accelerate launch --num_processes=$ngpus --main_process_port=$port -m lmms_eval \
+
+    launch_args=(--num_processes "$num_processes" --main_process_port "$port")
+    if [[ "$num_processes" -gt 1 ]]; then
+        launch_args=(--multi_gpu "${launch_args[@]}")
+    fi
+
+    env \
+        -u RANK \
+        -u WORLD_SIZE \
+        -u LOCAL_RANK \
+        -u LOCAL_WORLD_SIZE \
+        -u GROUP_RANK \
+        -u GROUP_WORLD_SIZE \
+        -u MASTER_ADDR \
+        -u MASTER_PORT \
+        accelerate launch "${launch_args[@]}" -m lmms_eval \
         --model qwen2_5_vl_gp \
         --model_args "pretrained=${base_model},new_modules_dir=${new_modules_dir}${MORE_ARGS}" \
         --tasks $task \
         --batch_size $batch_size \
-        --output_path ${output_path} \
+        --output_path "${output_path}" \
         --log_samples
 done

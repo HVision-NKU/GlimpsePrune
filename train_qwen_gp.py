@@ -1653,6 +1653,9 @@ class GPTrainer(Trainer):
         model.load_new_modules(resume_from_checkpoint)
         
     def _get_train_sampler(self) -> torch.utils.data.Sampler:
+        if self.reward_weight <= 0 and self.num_generations == 1 and self.num_iterations == 1:
+            return super()._get_train_sampler()
+
         effective_batch_size = (
             self.args.per_device_train_batch_size
             * self.accelerator.num_processes
@@ -1858,6 +1861,10 @@ class GPModelConfig:
     attn_fuse_hidden_act: str = field(
         default="silu",
         metadata={"help": "Activation function for the fusion."},
+    )
+    attn_fuse_use_flash_attn: bool = field(
+        default=False,
+        metadata={"help": "Whether to use FlashAttention in the attention fuser."},
     )
     ori_attn_supervision: bool = field(
         default=True,

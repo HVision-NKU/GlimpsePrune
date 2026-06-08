@@ -21,6 +21,11 @@ class Qwen2_5_VL_GP(BaseInferModel):
                     min_remain_num=None,
                     max_remain_ratio=None,
                     fixed_remain_ratio=None,
+                    enable_frame_redundancy_merge=False,
+                    frame_redundancy_pooling_mode="mask",
+                    frame_redundancy_min_keep_ratio=0.5,
+                    frame_redundancy_min_keep_tokens=4,
+                    frame_redundancy_similarity_threshold=0.97,
                     adapter_dir=None,
                     adapter_merge=False,
                     new_modules_config=None,
@@ -58,6 +63,11 @@ class Qwen2_5_VL_GP(BaseInferModel):
             model.config.max_remain_ratio = max_remain_ratio
         if fixed_remain_ratio is not None:
             model.config.fixed_remain_ratio = fixed_remain_ratio
+        model.config.enable_frame_redundancy_merge = enable_frame_redundancy_merge
+        model.config.frame_redundancy_pooling_mode = frame_redundancy_pooling_mode
+        model.config.frame_redundancy_min_keep_ratio = frame_redundancy_min_keep_ratio
+        model.config.frame_redundancy_min_keep_tokens = frame_redundancy_min_keep_tokens
+        model.config.frame_redundancy_similarity_threshold = frame_redundancy_similarity_threshold
 
         if adapter_dir is not None:
             model = PeftModel.from_pretrained(model, adapter_dir, is_trainable=False)

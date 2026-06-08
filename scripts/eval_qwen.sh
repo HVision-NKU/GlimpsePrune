@@ -8,6 +8,7 @@ fi
 echo "Number of GPUs: $ngpus"
 
 export LMMS_EVAL_PLUGINS="my_lmms_eval"
+export DECORD_EOF_RETRY_MAX="${DECORD_EOF_RETRY_MAX:-40960}"
 
 base_model=${BASE_MODEL:-'Qwen/Qwen2.5-VL-3B-Instruct'}
 base_model_suffix=$(basename $base_model)
@@ -15,6 +16,9 @@ base_output_path=${BASE_OUTPUT_PATH:-"result/${base_model_suffix}/lmms_eval"}
 port=${PORT:-29500}
 attn_implementation=${ATTN_IMPL:-"flash_attention_2"}
 batch_size=${BATCH_SIZE:-1}
+limit=${LIMIT:-""}
+
+echo "DECORD_EOF_RETRY_MAX: $DECORD_EOF_RETRY_MAX"
 
 
 eval_list=( \
@@ -57,8 +61,8 @@ do
         --tasks $task \
         --batch_size $batch_size \
         --output_path $output_path \
-        --log_samples
+        --log_samples \
+        ${limit:+--limit $limit}
 done
-
 
 

@@ -1,3 +1,11 @@
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd -- "${script_dir}/.." && pwd)
+
+if [[ -f "${repo_root}/.env" ]]; then
+    # shellcheck disable=SC1091
+    source "${repo_root}/.env" >/dev/null 2>&1
+fi
+
 ngpus=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 
 # if CUDA_VISIBLE_DEVICES is set, use it
@@ -13,6 +21,7 @@ adapter_dir=${2:-""}
 
 brief=${BRIEF:-0}
 use_ref=${USE_REF:-0}
+use_zero_masks=${USE_ZERO_MASKS:-0}
 do_glimpse=${DO_GLIMPSE:-0}
 attn_implementation=${ATTN_IMPL:-""}
 save_masks=${SAVE_MASKS:-0}
@@ -24,7 +33,7 @@ if ! [[ "$batch_size_per_device" =~ ^[0-9]+$ ]] || [[ "$batch_size_per_device" -
     echo "Error: BATCH_SIZE_PER_DEVICE must be a positive integer, got: '$batch_size_per_device'"
     exit 1
 fi
-min_remain_num=${MIN_REMAIN_NUM:-0}
+min_remain_num=${MIN_REMAIN_NUM:-""}
 max_remain_ratio=${MAX_REMAIN_RATIO:-""}
 fixed_remain_ratio=${FIXED_REMAIN_RATIO:-""}
 vip_use_fa=${VIP_USE_FA:-0}
@@ -37,6 +46,11 @@ adapter_merge=${ADAPTER_MERGE:-1}
 min_pixels=${MIN_PIXELS:-0}
 max_pixels=${MAX_PIXELS:-0}
 reduce_layer=${REDUCE_LAYER:-""}
+enable_frame_redundancy_merge=${ENABLE_FRAME_REDUNDANCY_MERGE:-0}
+frame_redundancy_pooling_mode=${FRAME_REDUNDANCY_POOLING_MODE:-""}
+frame_redundancy_min_keep_ratio=${FRAME_REDUNDANCY_MIN_KEEP_RATIO:-""}
+frame_redundancy_min_keep_tokens=${FRAME_REDUNDANCY_MIN_KEEP_TOKENS:-""}
+frame_redundancy_similarity_threshold=${FRAME_REDUNDANCY_SIMILARITY_THRESHOLD:-""}
 tasks_override=${TASKS:-""}
 
 score_func="vllm_qwen_2_5_32b_int8"
@@ -99,6 +113,15 @@ if [[ $use_ref -eq 1 ]]; then
     PATH_SUFFIX="_use_ref"
 fi
 
+if [[ $use_zero_masks -eq 1 ]]; then
+    if [[ $use_ref -eq 1 ]]; then
+        echo "Error: USE_ZERO_MASKS cannot be used with USE_REF."
+        exit 1
+    fi
+    MORE_ARGS="${MORE_ARGS} --use_zero_masks"
+    PATH_SUFFIX="${PATH_SUFFIX}_zero-mask"
+fi
+
 
 if [[ $do_glimpse -eq 1 ]]; then
     MORE_ARGS="${MORE_ARGS} --do_func_name glimpse"
@@ -122,7 +145,11 @@ if [[ -n "$attn_implementation" ]]; then
     PATH_SUFFIX="${PATH_SUFFIX}_${attn_implementation}"
 fi
 
-if [[ $min_remain_num -ne 0 ]]; then
+if [[ -n "$min_remain_num" ]]; then
+    if ! [[ "$min_remain_num" =~ ^[0-9]+$ ]]; then
+        echo "Error: MIN_REMAIN_NUM must be a non-negative integer, got: '$min_remain_num'"
+        exit 1
+    fi
     MORE_ARGS="${MORE_ARGS} --min_remain_num ${min_remain_num}"
     PATH_SUFFIX="${PATH_SUFFIX}_min_${min_remain_num}"
 fi
@@ -182,6 +209,33 @@ fi
 if [[ -n "$reduce_layer" ]]; then
     MORE_ARGS="${MORE_ARGS} --reduce_layer ${reduce_layer}"
     PATH_SUFFIX="${PATH_SUFFIX}_l-${reduce_layer}"
+fi
+
+if [[ $enable_frame_redundancy_merge -eq 1 ]]; then
+    MORE_ARGS="${MORE_ARGS} --enable_frame_redundancy_merge"
+    PATH_SUFFIX="${PATH_SUFFIX}_frm"
+fi
+
+if [[ -n "$frame_redundancy_pooling_mode" ]]; then
+    MORE_ARGS="${MORE_ARGS} --frame_redundancy_pooling_mode ${frame_redundancy_pooling_mode}"
+    PATH_SUFFIX="${PATH_SUFFIX}_${frame_redundancy_pooling_mode}"
+fi
+
+if [[ -n "$frame_redundancy_min_keep_ratio" ]]; then
+    frame_redundancy_min_keep_ratio=$(python -c "print(${frame_redundancy_min_keep_ratio})")
+    MORE_ARGS="${MORE_ARGS} --frame_redundancy_min_keep_ratio ${frame_redundancy_min_keep_ratio}"
+    PATH_SUFFIX="${PATH_SUFFIX}_frmr-${frame_redundancy_min_keep_ratio}"
+fi
+
+if [[ -n "$frame_redundancy_min_keep_tokens" ]]; then
+    MORE_ARGS="${MORE_ARGS} --frame_redundancy_min_keep_tokens ${frame_redundancy_min_keep_tokens}"
+    PATH_SUFFIX="${PATH_SUFFIX}_frmt-${frame_redundancy_min_keep_tokens}"
+fi
+
+if [[ -n "$frame_redundancy_similarity_threshold" ]]; then
+    frame_redundancy_similarity_threshold=$(python -c "print(${frame_redundancy_similarity_threshold})")
+    MORE_ARGS="${MORE_ARGS} --frame_redundancy_similarity_threshold ${frame_redundancy_similarity_threshold}"
+    PATH_SUFFIX="${PATH_SUFFIX}_tau-${frame_redundancy_similarity_threshold}"
 fi
 
 

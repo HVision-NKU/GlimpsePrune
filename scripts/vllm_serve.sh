@@ -4,3 +4,4 @@ vllm serve Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8 \
     --max-num-seqs 4 \
     --max-model-len 2048 \
     --uvicorn-log-level warning
+ 

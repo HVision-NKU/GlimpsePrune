@@ -59,8 +59,8 @@ selected_visual_layers:
   - 15
   - 7
 
-
-output_dir: output/qwen2_5_7b_gp_1010
+load_adapter: output/qwen2_5_7b_gp_lora_ft_0801
+output_dir: output/qwen2_5_7b_gp_plus_0801
 
 
 bf16: true

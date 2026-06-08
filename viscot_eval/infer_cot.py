@@ -178,6 +178,26 @@ class ScriptArgs:
         default=None,
         metadata={"help": "Fixed ratio of visual tokens to remain after reduction (top-k by score). If None, disabled."}
     )
+    enable_frame_redundancy_merge: bool = field(
+        default=False,
+        metadata={"help": "Enable video-only frame redundancy merge after glimpse decoding."}
+    )
+    frame_redundancy_pooling_mode: str = field(
+        default="mask",
+        metadata={"help": "Pooling mode for frame redundancy merge: mask or full."}
+    )
+    frame_redundancy_min_keep_ratio: float = field(
+        default=0.5,
+        metadata={"help": "Minimum per-frame keep ratio required to participate in redundancy merge."}
+    )
+    frame_redundancy_min_keep_tokens: int = field(
+        default=4,
+        metadata={"help": "Minimum kept visual tokens per frame required to participate in redundancy merge."}
+    )
+    frame_redundancy_similarity_threshold: float = field(
+        default=0.97,
+        metadata={"help": "Cosine similarity threshold for connecting adjacent video frames in redundancy merge."}
+    )
     do_func_name: Literal["generate", "glimpse"] = field(
         default="generate",
         metadata={"help": "Function to use for processing."}

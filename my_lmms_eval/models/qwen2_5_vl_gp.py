@@ -1,9 +1,9 @@
 import base64
+import os
 import re
 from io import BytesIO
 from typing import List, Optional, Tuple, Union
 
-import decord
 import numpy as np
 import torch
 from accelerate import Accelerator, DistributedType
@@ -54,6 +54,11 @@ class Qwen2_5_VL_GP(lmms):
         reduce_layer: Optional[int] = None,
         min_remain_num: Optional[int] = None,
         max_remain_ratio: Optional[float] = None,
+        enable_frame_redundancy_merge: bool = False,
+        frame_redundancy_pooling_mode: str = "mask",
+        frame_redundancy_min_keep_ratio: float = 0.5,
+        frame_redundancy_min_keep_tokens: int = 4,
+        frame_redundancy_similarity_threshold: float = 0.97,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -71,10 +76,25 @@ class Qwen2_5_VL_GP(lmms):
             self._device = torch.device(f"cuda:{accelerator.local_process_index}")
             self.device_map = f"cuda:{accelerator.local_process_index}"
         else:
-            self._device = torch.device(device)
-            self.device_map = device_map if device_map else device
+            requested_device_map = device_map if device_map else device
+            if requested_device_map == "auto" and os.environ.get("WORLD_SIZE"):
+                local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", "0")))
+                if torch.cuda.is_available() and str(device).startswith("cuda"):
+                    local_rank = local_rank % torch.cuda.device_count()
+                    self._device = torch.device(f"cuda:{local_rank}")
+                    self.device_map = f"cuda:{local_rank}"
+                else:
+                    self._device = torch.device(device)
+                    self.device_map = device
+                eval_logger.warning(
+                    "WORLD_SIZE is set but Accelerate is in single-process mode; "
+                    f"using device_map={self.device_map!r} instead of 'auto' to avoid implicit tensor parallel init."
+                )
+            else:
+                self._device = torch.device(device)
+                self.device_map = requested_device_map
 
-       # Prepare model loading arguments
+        # Prepare model loading arguments
         model_kwargs = {
             "torch_dtype": "auto",
             "device_map": self.device_map,
@@ -99,6 +119,11 @@ class Qwen2_5_VL_GP(lmms):
             self._model.config.min_remain_num = min_remain_num
         if max_remain_ratio is not None:
             self._model.config.max_remain_ratio = max_remain_ratio
+        self._model.config.enable_frame_redundancy_merge = enable_frame_redundancy_merge
+        self._model.config.frame_redundancy_pooling_mode = frame_redundancy_pooling_mode
+        self._model.config.frame_redundancy_min_keep_ratio = frame_redundancy_min_keep_ratio
+        self._model.config.frame_redundancy_min_keep_tokens = frame_redundancy_min_keep_tokens
+        self._model.config.frame_redundancy_similarity_threshold = frame_redundancy_similarity_threshold
         
         if reduce_layer is not None:
             self._model.config.reduce_layer = reduce_layer
@@ -262,10 +287,6 @@ class Qwen2_5_VL_GP(lmms):
                 processed_visuals = []
                 for visual in visual_list[i]:
                     if isinstance(visual, str) and visual.endswith((".mp4", ".avi", ".mov")):  # Video file
-                        vr = decord.VideoReader(visual)
-                        first_frame = vr[0].asnumpy()
-                        height, width = first_frame.shape[:2]
-                        # max_pixels = height * width
                         processed_visuals.append({"type": "video", "video": visual})
                     elif isinstance(visual, Image.Image):  # Handle both single and multiple images
                         base64_image = visual.convert("RGB")

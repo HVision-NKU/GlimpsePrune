@@ -8,6 +8,7 @@ fi
 echo "Number of GPUs: $ngpus"
 
 export LMMS_EVAL_PLUGINS="my_lmms_eval"
+export DECORD_EOF_RETRY_MAX="${DECORD_EOF_RETRY_MAX:-40960}"
 
 base_model=${BASE_MODEL:-'Qwen/Qwen2.5-VL-3B-Instruct'}
 base_model_suffix=$(basename $base_model)
@@ -78,6 +79,7 @@ echo "MORE_ARGS: $MORE_ARGS"
 echo "PATH_SUFFIX: $PATH_SUFFIX"
 echo "Batch size: $batch_size"
 echo "Rerun: $rerun"
+echo "DECORD_EOF_RETRY_MAX: $DECORD_EOF_RETRY_MAX"
 
 base_output_path="${base_output_path}${PATH_SUFFIX}/lmms_eval"
 
@@ -153,5 +155,4 @@ do
         --output_path $output_path \
         --verbosity=DEBUG
 done
-
 

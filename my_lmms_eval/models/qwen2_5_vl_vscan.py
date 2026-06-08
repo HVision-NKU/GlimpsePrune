@@ -4,7 +4,6 @@ from io import BytesIO
 from typing import List, Optional, Tuple, Union
 
 import ast
-import decord
 import numpy as np
 import torch
 from accelerate import Accelerator, DistributedType
@@ -266,10 +265,6 @@ class Qwen2_5_VL_Vscan(lmms):
                 processed_visuals = []
                 for visual in visual_list[i]:
                     if isinstance(visual, str) and visual.endswith((".mp4", ".avi", ".mov")):  # Video file
-                        vr = decord.VideoReader(visual)
-                        first_frame = vr[0].asnumpy()
-                        height, width = first_frame.shape[:2]
-                        # max_pixels = height * width
                         processed_visuals.append({"type": "video", "video": visual})
                     elif isinstance(visual, Image.Image):  # Handle both single and multiple images
                         base64_image = visual.convert("RGB")

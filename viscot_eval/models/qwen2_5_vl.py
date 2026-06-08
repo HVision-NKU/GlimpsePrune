@@ -8,10 +8,45 @@ from transformers.models.qwen2_5_vl import (
 
 
 from .base import BaseInferModel
+from utils.warppers import time_logger
 
 
 class Qwen2_5_VL(BaseInferModel):
     def _init_model(self, **kwargs):
+        # Patch in the vscan custom forward solely to obtain a split between
+        # prefilling (`llm_forward_prefilling`) and decoding (`llm_forward`)
+        # so that bs-sweep efficiency analysis produces per-stage timing.
+        # Pruning is disabled: layer_list=[] and image_token_ratio=1.0.
+        from qwen_vscan.model.qwen2_5_vl_custom import (
+            Qwen2_5_VLForConditionalGeneration_X,
+            Qwen2_5_VisionTransformerPretrainedModel_X,
+            Qwen2_5_VLVisionBlock_X,
+            Qwen2_5_VLVisionSdpaAttention_X,
+            Qwen2_5_VLVisionFlashAttention2_X,
+            Qwen2_5_VisionPatchEmbed_X,
+            Qwen2_5_VLModel_X,
+        )
+        from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+            Qwen2_5_VisionTransformerPretrainedModel,
+            Qwen2_5_VLVisionBlock,
+            Qwen2_5_VLVisionSdpaAttention,
+            Qwen2_5_VLVisionFlashAttention2,
+            Qwen2_5_VisionPatchEmbed,
+            Qwen2_5_VLModel,
+        )
+        Qwen2_5_VLForConditionalGeneration.forward = Qwen2_5_VLForConditionalGeneration_X.forward
+        Qwen2_5_VLForConditionalGeneration.llm_forward = time_logger(Qwen2_5_VLForConditionalGeneration_X.llm_forward)
+        Qwen2_5_VLForConditionalGeneration.llm_forward_prefilling = time_logger(Qwen2_5_VLForConditionalGeneration_X.llm_forward_prefilling)
+        Qwen2_5_VLForConditionalGeneration.prepare_inputs_for_generation = Qwen2_5_VLForConditionalGeneration_X.prepare_inputs_for_generation
+        Qwen2_5_VisionTransformerPretrainedModel.forward = Qwen2_5_VisionTransformerPretrainedModel_X.forward
+        Qwen2_5_VLVisionBlock.forward = Qwen2_5_VLVisionBlock_X.forward
+        Qwen2_5_VLVisionSdpaAttention.forward = Qwen2_5_VLVisionSdpaAttention_X.forward
+        Qwen2_5_VLVisionFlashAttention2.forward = Qwen2_5_VLVisionFlashAttention2_X.forward
+        Qwen2_5_VisionPatchEmbed.forward = Qwen2_5_VisionPatchEmbed_X.forward
+        Qwen2_5_VLModel.forward = Qwen2_5_VLModel_X.forward
+        Qwen2_5_VLModel.layer_prune = Qwen2_5_VLModel_X.layer_prune
+        Qwen2_5_VLModel._make_mask = Qwen2_5_VLModel_X._make_mask
+
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
         model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             self._base_model,
@@ -21,6 +56,10 @@ class Qwen2_5_VL(BaseInferModel):
         )
         self._model = model
         self._model.eval()
+        # Disable any pruning logic in the patched forward.
+        self._model.model.layer_list = []
+        self._model.model.image_token_ratio_list = []
+        self._model.image_token_ratio = 1.0
     
     def _init_processor(self, 
                         min_pixels,

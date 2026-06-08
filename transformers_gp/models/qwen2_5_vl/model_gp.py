@@ -279,6 +279,34 @@ class AttnFuserDummy(BaseAttnFuser):
     
 
 @register_attn_fuser()
+class AttnFuserMLP(BaseAttnFuser):
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+        num_attn_layers = len(config.selected_layers)
+        num_attn_heads = config.num_attention_heads
+        input_size = num_attn_layers * num_attn_heads
+        if input_size <= 0:
+            raise ValueError("AttnFuserMLP requires at least one selected attention layer.")
+        self.attn_mlp = nn.Sequential(
+            nn.Linear(input_size, config.attn_fuse_size),
+            ACT2FN[config.attn_fuse_hidden_act],
+            nn.Linear(config.attn_fuse_size, 1),
+        )
+
+    def _init_weights(self):
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+
+    def forward(self, attn_map, attn_grid_hw, selected_image_embeds, window_index, cu_seqlens, cu_window_seqlens):
+        logits = self.attn_mlp(attn_map).squeeze(-1)
+        return logits.unsqueeze(0)
+
+
+@register_attn_fuser()
 class AttnFuserV1(BaseAttnFuser):
     def __init__(self, config):
         super().__init__(config)
@@ -1285,7 +1313,16 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
         
         
     # @time_logger
-    def _decode_image_token_mask_logits(self, batched_attn_map, attn_grid, selected_image_embeds, window_index, cu_seqlens, cu_window_seqlens):
+    def _decode_image_token_mask_logits(
+        self,
+        batched_attn_map,
+        attn_grid,
+        selected_image_embeds,
+        window_index,
+        cu_seqlens,
+        cu_window_seqlens,
+        visual_token_embeds=None,
+    ):
         """
         batched_attn_map: list(bsz) of [num_tokens, num_layers, num_heads]
         grid_size: [bsz, 2] (height, width)
@@ -1367,7 +1404,7 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
             label_mask = labels != -100
             q_indices = label_mask.int().argmax(dim=-1) - 1
             q_indices = q_indices.tolist()
-        kv_mask = input_ids == self.config.image_token_id    
+        kv_mask = (input_ids == self.config.image_token_id) | (input_ids == self.config.video_token_id)
         
         
         selected_layers = tuple(self.config.selected_layers)
@@ -1490,6 +1527,21 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
                 image_token_mask_logits.append(torch.logit(torch.zeros((1, attn_grid[i][0] * attn_grid[i][1]), device=hidden_states_for_reduction.device)))
         else:
             image_token_mask_logits = self._decode_image_token_mask_logits(batched_attns, attn_grid, **image_info)
+            video_token_id = getattr(self.config, "video_token_id", None)
+            has_image_tokens = bool((input_ids == self.config.image_token_id).any().item())
+            has_video_tokens = bool((input_ids == video_token_id).any().item()) if video_token_id is not None else False
+            if (
+                self.config.enable_frame_redundancy_merge
+                and has_video_tokens
+                and not has_image_tokens
+                and image_info.get("visual_token_embeds") is not None
+            ):
+                image_token_mask_logits = self._merge_redundant_video_frames(
+                    input_ids=input_ids,
+                    image_token_mask_logits=image_token_mask_logits,
+                    attn_grid=attn_grid,
+                    visual_token_embeds=image_info["visual_token_embeds"],
+                )
                 
         # Step 6. Trim (reducted image tokens and le tokens) hidden_states, next_cache, input_ids, attention_mask
         if not use_ref_masks and hasattr(self, "learnable_embeddings"):
@@ -1586,88 +1638,234 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
         return self._glimpse_forward_after_reduction(**reduced_info, return_dict=return_dict, use_cache=use_cache)
 
     
-    def _get_remain_masks(self, input_ids, attention_mask, image_token_mask_logits, attn_grid):
+    def _get_contiguous_run_lengths(self, mask_1d: torch.Tensor) -> List[int]:
+        idx = torch.nonzero(mask_1d, as_tuple=False).flatten()
+        if idx.numel() == 0:
+            return []
+        if idx.numel() == 1:
+            return [1]
+        diffs = idx[1:] - idx[:-1]
+        cut_points = torch.nonzero(diffs != 1, as_tuple=False).flatten() + 1
+        cuts = torch.cat(
+            [
+                torch.zeros(1, dtype=cut_points.dtype, device=cut_points.device),
+                cut_points,
+                torch.tensor([idx.numel()], dtype=cut_points.dtype, device=cut_points.device),
+            ],
+            dim=0,
+        )
+        lengths = (cuts[1:] - cuts[:-1]).tolist()
+        return [int(x) for x in lengths]
+
+    def _apply_token_constraints(self, one_prob: torch.Tensor) -> torch.Tensor:
         threshold = self.config.reduce_threshold
         min_remain_num = self.config.min_remain_num
         max_remain_ratio = self.config.max_remain_ratio
         fixed_remain_ratio = self.config.fixed_remain_ratio
-        
-        image_token_bool_masks = []
 
-        def _get_contiguous_run_lengths(mask_1d: torch.Tensor) -> List[int]:
-            idx = torch.nonzero(mask_1d, as_tuple=False).flatten()
-            if idx.numel() == 0:
-                return []
-            if idx.numel() == 1:
-                return [1]
-            diffs = idx[1:] - idx[:-1]
-            cut_points = torch.nonzero(diffs != 1, as_tuple=False).flatten() + 1
-            cuts = torch.cat(
-                [
-                    torch.zeros(1, dtype=cut_points.dtype, device=cut_points.device),
-                    cut_points,
-                    torch.tensor([idx.numel()], dtype=cut_points.dtype, device=cut_points.device),
-                ],
-                dim=0,
-            )
-            lengths = (cuts[1:] - cuts[:-1]).tolist()
-            return [int(x) for x in lengths]
+        one_prob = one_prob.flatten()
+        if one_prob.numel() == 0:
+            return torch.zeros_like(one_prob, dtype=torch.bool)
 
-        def _apply_constraints(one_prob: torch.Tensor) -> torch.Tensor:
-            one_prob = one_prob.flatten()
-            if one_prob.numel() == 0:
-                return torch.zeros_like(one_prob, dtype=torch.bool)
-
-            if fixed_remain_ratio is not None:
-                num_tokens = one_prob.numel()
-                fixed_remain_num = int(float(fixed_remain_ratio) * num_tokens)
-                fixed_remain_num = max(1, min(num_tokens, fixed_remain_num))
-                topk_idx = torch.topk(one_prob, fixed_remain_num, dim=-1).indices
-                mask = torch.zeros_like(one_prob, dtype=torch.bool)
-                mask[topk_idx] = True
-                return mask
-
-            mask = one_prob > threshold
-
-            if max_remain_ratio is not None:
-                remain_num = int(mask.sum().item())
-                if mask.numel() > 0:
-                    remain_ratio = remain_num / mask.numel()
-                else:
-                    remain_ratio = 0.0
-                if remain_ratio > max_remain_ratio:
-                    max_remain_num = int(max_remain_ratio * mask.numel())
-                    max_remain_num = max(1, min(mask.numel(), max_remain_num))
-                    topk_idx = torch.topk(one_prob, max_remain_num, dim=-1).indices
-                    mask.zero_()
-                    mask[topk_idx] = True
-
-            if min_remain_num is not None:
-                remain_num = int(mask.sum().item())
-                if remain_num < min_remain_num:
-                    k = max(1, min(mask.numel(), int(min_remain_num)))
-                    topk_idx = torch.topk(one_prob, k, dim=-1).indices
-                    mask[topk_idx] = True
-
+        if fixed_remain_ratio is not None:
+            num_tokens = one_prob.numel()
+            fixed_remain_num = int(float(fixed_remain_ratio) * num_tokens)
+            fixed_remain_num = max(1, min(num_tokens, fixed_remain_num))
+            topk_idx = torch.topk(one_prob, fixed_remain_num, dim=-1).indices
+            mask = torch.zeros_like(one_prob, dtype=torch.bool)
+            mask[topk_idx] = True
             return mask
 
-        is_image_mask = input_ids == self.config.image_token_id
+        mask = one_prob > threshold
+
+        if max_remain_ratio is not None:
+            remain_num = int(mask.sum().item())
+            remain_ratio = remain_num / mask.numel() if mask.numel() > 0 else 0.0
+            if remain_ratio > max_remain_ratio:
+                max_remain_num = int(max_remain_ratio * mask.numel())
+                max_remain_num = max(1, min(mask.numel(), max_remain_num))
+                topk_idx = torch.topk(one_prob, max_remain_num, dim=-1).indices
+                mask.zero_()
+                mask[topk_idx] = True
+
+        if min_remain_num is not None:
+            remain_num = int(mask.sum().item())
+            if remain_num < min_remain_num:
+                k = max(1, min(mask.numel(), int(min_remain_num)))
+                topk_idx = torch.topk(one_prob, k, dim=-1).indices
+                mask[topk_idx] = True
+
+        return mask
+
+    def _get_visual_sub_block_lengths_by_batch(self, input_ids, attn_grid):
+        video_token_id = getattr(self.config, "video_token_id", None)
+        is_visual_mask = input_ids == self.config.image_token_id
+        if video_token_id is not None:
+            is_visual_mask = is_visual_mask | (input_ids == video_token_id)
         B = input_ids.shape[0]
-        image_block_lengths_by_batch = [_get_contiguous_run_lengths(is_image_mask[b]) for b in range(B)]
-        total_image_blocks = sum(len(one) for one in image_block_lengths_by_batch)
+        visual_block_lengths_by_batch = [self._get_contiguous_run_lengths(is_visual_mask[b]) for b in range(B)]
+        has_image_tokens = bool((input_ids == self.config.image_token_id).any().item())
+        has_video_tokens = bool((input_ids == video_token_id).any().item()) if video_token_id is not None else False
+        is_video_only = has_video_tokens and not has_image_tokens
+
+        if is_video_only:
+            frame_token_counts = [int((grid_hw[0] * grid_hw[1]).item()) for grid_hw in attn_grid]
+            visual_sub_block_lengths_by_batch = []
+            frame_idx = 0
+            for block_lengths in visual_block_lengths_by_batch:
+                one_sub_blocks = []
+                for block_len in block_lengths:
+                    consumed = 0
+                    while consumed < block_len:
+                        if frame_idx >= len(frame_token_counts):
+                            raise ValueError(
+                                "Video frame layout does not match attn_grid while splitting visual blocks."
+                            )
+                        one_frame_len = frame_token_counts[frame_idx]
+                        if consumed + one_frame_len > block_len:
+                            raise ValueError(
+                                f"Video frame length overflow while splitting block: block_len={block_len}, "
+                                f"consumed={consumed}, frame_len={one_frame_len}."
+                            )
+                        one_sub_blocks.append(one_frame_len)
+                        consumed += one_frame_len
+                        frame_idx += 1
+                visual_sub_block_lengths_by_batch.append(one_sub_blocks)
+            if frame_idx != len(frame_token_counts):
+                raise ValueError(
+                    f"Unused video frames remain after splitting visual blocks: used={frame_idx}, total={len(frame_token_counts)}."
+                )
+        else:
+            visual_sub_block_lengths_by_batch = visual_block_lengths_by_batch
+
+        return visual_sub_block_lengths_by_batch, is_video_only, is_visual_mask
+
+    def _merge_redundant_video_frames(self, input_ids, image_token_mask_logits, attn_grid, visual_token_embeds):
+        if visual_token_embeds is None:
+            return image_token_mask_logits
+        if not isinstance(image_token_mask_logits, (list, tuple)):
+            return image_token_mask_logits
+        image_token_mask_logits = list(image_token_mask_logits)
+
+        visual_sub_block_lengths_by_batch, is_video_only, _ = self._get_visual_sub_block_lengths_by_batch(input_ids, attn_grid)
+        if not is_video_only or len(image_token_mask_logits) != input_ids.shape[0]:
+            return image_token_mask_logits
+
+        pooling_mode = self.config.frame_redundancy_pooling_mode
+        if pooling_mode not in {"mask", "full"}:
+            raise ValueError(
+                f"Unsupported frame_redundancy_pooling_mode: {pooling_mode}. Supported values: 'mask', 'full'."
+            )
+
+        merged_logits = []
+        token_offset = 0
+        for batch_idx, frame_lengths in enumerate(visual_sub_block_lengths_by_batch):
+            one_logits = image_token_mask_logits[batch_idx]
+            total_tokens = sum(frame_lengths)
+            one_visual_embeds = visual_token_embeds[token_offset : token_offset + total_tokens]
+            token_offset += total_tokens
+
+            if (
+                one_logits is None
+                or total_tokens == 0
+                or one_logits.shape[-1] != total_tokens
+                or one_visual_embeds.shape[0] != total_tokens
+                or len(frame_lengths) <= 1
+            ):
+                merged_logits.append(one_logits)
+                continue
+
+            one_prob = one_logits[-1].sigmoid().flatten()
+            frame_probs = one_prob.split(frame_lengths, dim=0)
+            frame_masks = [self._apply_token_constraints(frame_prob) for frame_prob in frame_probs]
+            keep_counts = torch.tensor(
+                [int(frame_mask.sum().item()) for frame_mask in frame_masks],
+                device=one_logits.device,
+                dtype=torch.long,
+            )
+            frame_lengths_tensor = torch.tensor(frame_lengths, device=one_logits.device, dtype=torch.long)
+            keep_ratios = keep_counts.to(torch.float32) / frame_lengths_tensor.clamp_min(1).to(torch.float32)
+            eligible = (
+                (keep_ratios >= float(self.config.frame_redundancy_min_keep_ratio))
+                & (keep_counts >= int(self.config.frame_redundancy_min_keep_tokens))
+            )
+            if eligible.sum().item() <= 1:
+                merged_logits.append(one_logits)
+                continue
+
+            frame_ids = torch.repeat_interleave(
+                torch.arange(len(frame_lengths), device=one_logits.device, dtype=torch.long),
+                frame_lengths_tensor,
+            )
+            if pooling_mode == "mask":
+                token_weights = torch.cat([frame_mask.to(one_visual_embeds.dtype) for frame_mask in frame_masks], dim=0)
+            else:
+                token_weights = torch.ones((total_tokens,), device=one_logits.device, dtype=one_visual_embeds.dtype)
+
+            pooled_sum = torch.zeros(
+                (len(frame_lengths), one_visual_embeds.shape[-1]),
+                device=one_visual_embeds.device,
+                dtype=one_visual_embeds.dtype,
+            )
+            pooled_sum.index_add_(0, frame_ids, one_visual_embeds * token_weights.unsqueeze(-1))
+            denom = torch.zeros((len(frame_lengths),), device=one_visual_embeds.device, dtype=one_visual_embeds.dtype)
+            denom.index_add_(0, frame_ids, token_weights)
+            pooled = pooled_sum / denom.clamp_min(1.0).unsqueeze(-1)
+            pooled = F.normalize(pooled, dim=-1, eps=1e-6)
+
+            sims = (pooled[:-1] * pooled[1:]).sum(dim=-1)
+            connect = eligible[:-1] & eligible[1:] & (sims >= float(self.config.frame_redundancy_similarity_threshold))
+            group_start = torch.ones((len(frame_lengths),), device=one_logits.device, dtype=torch.bool)
+            if connect.numel() > 0:
+                group_start[1:] = ~connect
+            group_ids = group_start.to(torch.long).cumsum(dim=0) - 1
+            num_groups = int(group_ids[-1].item()) + 1
+
+            frame_indices = torch.arange(len(frame_lengths), device=one_logits.device, dtype=torch.float32)
+            encoded_scores = keep_counts.to(torch.float32) * (len(frame_lengths) + 1.0)
+            encoded_scores = encoded_scores + (len(frame_lengths) - frame_indices) / (len(frame_lengths) + 1.0)
+            group_best_scores = torch.full(
+                (num_groups,),
+                torch.finfo(encoded_scores.dtype).min,
+                device=one_logits.device,
+                dtype=encoded_scores.dtype,
+            )
+            group_best_scores.scatter_reduce_(0, group_ids, encoded_scores, reduce="amax", include_self=True)
+            keep_frames = encoded_scores == group_best_scores[group_ids]
+            drop_tokens = ~keep_frames[frame_ids]
+            if not drop_tokens.any():
+                merged_logits.append(one_logits)
+                continue
+
+            pruned_logits = one_logits.clone()
+            pruned_logits[..., drop_tokens] = pruned_logits[..., drop_tokens] - 100.0
+            merged_logits.append(pruned_logits)
+
+        if token_offset != visual_token_embeds.shape[0]:
+            raise ValueError(
+                f"Video token embeddings do not align with frame lengths: used={token_offset}, total={visual_token_embeds.shape[0]}."
+            )
+        return merged_logits
+
+    def _get_remain_masks(self, input_ids, attention_mask, image_token_mask_logits, attn_grid):
+        image_token_bool_masks = []
+        visual_sub_block_lengths_by_batch, _, is_visual_mask = self._get_visual_sub_block_lengths_by_batch(input_ids, attn_grid)
+        B = input_ids.shape[0]
+
+        total_visual_blocks = sum(len(one) for one in visual_sub_block_lengths_by_batch)
 
         # `image_token_mask_logits` can be either:
         # - list(bsz) of [num_layers, num_image_tokens]     (default attention decode)
         # - list(num_image_blocks) of [1, h*w]              (ref/zero masks; one item per image block)
 
         def _try_parse_as_by_image():
-            if len(image_token_mask_logits) != total_image_blocks:
+            if len(image_token_mask_logits) != total_visual_blocks:
                 return None
             parsed_masks = []
             img_i = 0
             for b in range(B):
-                one_masks = []
-                for one_len in image_block_lengths_by_batch[b]:
+                one_probs = []
+                for one_len in visual_sub_block_lengths_by_batch[b]:
                     one_logits = image_token_mask_logits[img_i]
                     img_i += 1
                     if one_logits is None:
@@ -1675,11 +1873,11 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
                     one_prob = one_logits[-1].sigmoid().flatten()
                     if one_prob.numel() != one_len:
                         return None
-                    one_masks.append(_apply_constraints(one_prob))
-                if len(one_masks) == 0:
+                    one_probs.append(one_prob)
+                if len(one_probs) == 0:
                     parsed_masks.append(torch.zeros((0,), dtype=torch.bool, device=input_ids.device))
                 else:
-                    parsed_masks.append(torch.cat(one_masks, dim=0))
+                    parsed_masks.append(self._apply_token_constraints(torch.cat(one_probs, dim=0)))
             return parsed_masks
 
         def _try_parse_as_by_batch():
@@ -1688,7 +1886,7 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
             parsed_masks = []
             for b in range(B):
                 one_logits = image_token_mask_logits[b]
-                block_lengths = image_block_lengths_by_batch[b]
+                block_lengths = visual_sub_block_lengths_by_batch[b]
                 expected_numel = sum(block_lengths)
                 if one_logits is None:
                     if expected_numel != 0:
@@ -1698,13 +1896,7 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
                 one_prob = one_logits[-1].sigmoid().flatten()
                 if expected_numel != one_prob.numel():
                     return None
-                st = 0
-                one_masks = []
-                for one_len in block_lengths:
-                    ed = st + one_len
-                    one_masks.append(_apply_constraints(one_prob[st:ed]))
-                    st = ed
-                parsed_masks.append(torch.cat(one_masks, dim=0) if len(one_masks) else torch.zeros_like(one_prob, dtype=torch.bool))
+                parsed_masks.append(self._apply_token_constraints(one_prob))
             return parsed_masks
 
         parsed_by_batch = _try_parse_as_by_batch()
@@ -1718,15 +1910,15 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
             else:
                 raise ValueError(
                     "Unable to parse image_token_mask_logits. Expected one of: "
-                    f"list(bsz={B}) with per-sample numel matching image tokens, or "
-                    f"list(num_image_blocks={total_image_blocks}) with per-block numel matching image tokens. "
+                    f"list(bsz={B}) with per-sample numel matching visual tokens, or "
+                    f"list(num_visual_blocks={total_visual_blocks}) with per-block numel matching visual tokens. "
                     f"Got len(image_token_mask_logits)={len(image_token_mask_logits)}, "
                     f"len(attn_grid)={attn_grid.shape[0]}."
                 )
             
         # image_token_bool_masks = torch.cat(image_token_bool_masks, dim=0)
         remain_masks = attention_mask.clone().bool()
-        remain_masks[is_image_mask] = torch.cat(image_token_bool_masks, dim=0)
+        remain_masks[is_visual_mask] = torch.cat(image_token_bool_masks, dim=0)
         remain_masks &= attention_mask.bool()  # Ensure remain_masks is still a valid attention mask, usually all image tokens are valid in attention_mask
         return remain_masks, image_token_bool_masks
     
@@ -1927,8 +2119,10 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
     
             
             
-    def _scatter_image_embeds(self, input_ids, inputs_embeds, image_embeds):
-        mask = input_ids == self.config.image_token_id
+    def _scatter_image_embeds(self, input_ids, inputs_embeds, image_embeds, token_id=None):
+        if token_id is None:
+            token_id = self.config.image_token_id
+        mask = input_ids == token_id
         mask_unsqueezed = mask.unsqueeze(-1)
         mask_expanded = mask_unsqueezed.expand_as(inputs_embeds)
         image_mask = mask_expanded.to(inputs_embeds.device)
@@ -1936,6 +2130,25 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
         image_embeds = image_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
         inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
         return inputs_embeds
+
+    def _expand_video_grid_thw(self, video_grid_thw: torch.Tensor) -> torch.Tensor:
+        rows = []
+        for i in range(video_grid_thw.shape[0]):
+            t, h, w = video_grid_thw[i]
+            frame_count = int(t.item())
+            rows.append(
+                torch.stack(
+                    [
+                        torch.ones((frame_count,), dtype=video_grid_thw.dtype, device=video_grid_thw.device),
+                        h.expand(frame_count),
+                        w.expand(frame_count),
+                    ],
+                    dim=1,
+                )
+            )
+        if len(rows) == 0:
+            return video_grid_thw.new_zeros((0, 3))
+        return torch.cat(rows, dim=0)
             
     # @time_logger
     def _visual_forward(self, hidden_states: torch.Tensor, grid_thw: torch.Tensor):
@@ -2004,6 +2217,7 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
             "window_index": window_index,
             "cu_window_seqlens": cu_window_seqlens,
             "cu_seqlens": cu_seqlens,
+            "visual_token_embeds": hidden_states,
         }
         
         return hidden_states, middle_info
@@ -2101,6 +2315,8 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         actual_use_ref_masks = use_ref_masks if use_ref_masks is not None else self.config.use_ref_masks
+        image_info = None
+        video_info = None
 
         if inputs_embeds is None and not self.todo_selection:
             inputs_embeds = self.model.embed_tokens(input_ids)
@@ -2117,21 +2333,19 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
 
             if pixel_values_videos is not None:
                 pixel_values_videos = pixel_values_videos.type(self.visual.dtype)
-                video_embeds = self.visual(pixel_values_videos, grid_thw=video_grid_thw)
+                video_embeds, video_info = self._visual_forward(pixel_values_videos, grid_thw=video_grid_thw)
                 n_video_tokens = (input_ids == self.config.video_token_id).sum().item()
                 n_video_features = video_embeds.shape[0]
                 if n_video_tokens != n_video_features:
                     raise ValueError(
                         f"Video features and video tokens do not match: tokens: {n_video_tokens}, features {n_video_features}"
                     )
-
-                mask = input_ids == self.config.video_token_id
-                mask_unsqueezed = mask.unsqueeze(-1)
-                mask_expanded = mask_unsqueezed.expand_as(inputs_embeds)
-                video_mask = mask_expanded.to(inputs_embeds.device)
-
-                video_embeds = video_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
-                inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
+                inputs_embeds = self._scatter_image_embeds(
+                    input_ids,
+                    inputs_embeds,
+                    video_embeds,
+                    token_id=self.config.video_token_id,
+                )
 
             if attention_mask is not None:
                 attention_mask = attention_mask.to(inputs_embeds.device)
@@ -2168,10 +2382,32 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
                     position_ids = position_ids.add(delta)
                     position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
                 
-        if do_selection and pixel_values is not None:   # only support single/multi image inputs now
+        has_image = pixel_values is not None
+        has_video = pixel_values_videos is not None
+
+        if do_selection and image_token_mask_logits is not None and self.todo_selection:
+            return self._do_delayed_selection(
+                override_image_token_mask_logits=image_token_mask_logits,
+                return_dict=return_dict,
+                use_cache=use_cache,
+            )
+
+        if do_selection and (has_image or has_video):
+            if has_image and has_video:
+                raise NotImplementedError(
+                    "Mixed image+video selection is not supported in the MVP implementation."
+                )
+            if has_video and actual_use_ref_masks:
+                raise NotImplementedError("Reference masks are not supported for video-only selection.")
             if image_token_mask_logits is None:   # only do prune at the prefilling time
                 assert not output_attentions
                 assert not output_hidden_states
+                if has_image:
+                    visual_info = image_info
+                    visual_grid_thw = image_grid_thw
+                else:
+                    visual_info = video_info
+                    visual_grid_thw = self._expand_video_grid_thw(video_grid_thw)
                 return self._glimpse_forward(
                     input_ids=input_ids,
                     inputs_embeds=inputs_embeds,
@@ -2181,18 +2417,12 @@ class Qwen2_5_VL_GP_ForConditionalGeneration(Qwen2_5_VLForConditionalGeneration)
                     attention_mask=attention_mask,
                     past_key_values=past_key_values,
                     use_cache=use_cache,
-                    image_info=image_info,
-                    image_grid_thw=image_grid_thw,
+                    image_info=visual_info,
+                    image_grid_thw=visual_grid_thw,
                     ref_token_masks=ref_token_masks,
                     return_dict=return_dict,
                     delay_selection=delay_selection,
                     use_ref_masks=actual_use_ref_masks,
-                )
-            elif self.todo_selection:
-                return self._do_delayed_selection(
-                    override_image_token_mask_logits=image_token_mask_logits, 
-                    return_dict=return_dict,
-                    use_cache=use_cache,
                 )
                 
         # tmp

@@ -1,4 +1,4 @@
-model_name_or_path: Qwen/Qwen2.5-VL-7B-Instruct
+model_name_or_path: Qwen/Qwen2.5-VL-72B-Instruct
 train_dataset: dataset_configs/gqa_rand.yaml
 loc_loss_class: MaskLoss
 loc_dice_weight: 1.0
@@ -38,9 +38,61 @@ le_layers:
   - 25
   - 26
   - 27
+  - 28
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 40
+  - 41
+  - 42
+  - 43
+  - 44
+  - 45
+  - 46
+  - 47
+  - 48
+  - 49
+  - 50
+  - 51
+  - 52
+  - 53
+  - 54
+  - 55
+  - 56
+  - 57
+  - 58
+  - 59
+  - 60
+  - 61
+  - 62
+  - 63
+  - 64
+  - 65
+  - 66
+  - 67
+  - 68
+  - 69
+  - 70
+  - 71
+  - 72
+  - 73
+  - 74
+  - 75
+  - 76
+  - 77
+  - 78
+  - 79
 selected_layers:
-  - 18
-reduce_layer: 18
+  - 53
+reduce_layer: 53
 
 
 
@@ -60,7 +112,7 @@ selected_visual_layers:
   - 7
 
 
-output_dir: output/qwen2_5_7b_gp_1010
+output_dir: output/qwen2_5_72b_gp_1010
 
 
 bf16: true
