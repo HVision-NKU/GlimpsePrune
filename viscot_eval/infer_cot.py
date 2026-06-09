@@ -187,16 +187,16 @@ class ScriptArgs:
         metadata={"help": "Pooling mode for frame redundancy merge: mask or full."}
     )
     frame_redundancy_min_keep_ratio: float = field(
-        default=0.5,
-        metadata={"help": "Minimum per-frame keep ratio required to participate in redundancy merge."}
+        default=0.1,
+        metadata={"help": "Minimum per-frame keep ratio required to participate in redundancy merge (rho in the paper)."}
     )
     frame_redundancy_min_keep_tokens: int = field(
-        default=4,
+        default=1,
         metadata={"help": "Minimum kept visual tokens per frame required to participate in redundancy merge."}
     )
     frame_redundancy_similarity_threshold: float = field(
-        default=0.97,
-        metadata={"help": "Cosine similarity threshold for connecting adjacent video frames in redundancy merge."}
+        default=0.9,
+        metadata={"help": "Cosine similarity threshold for connecting adjacent video frames in redundancy merge (tau in the paper)."}
     )
     do_func_name: Literal["generate", "glimpse"] = field(
         default="generate",

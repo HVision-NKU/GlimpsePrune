@@ -56,9 +56,9 @@ class Qwen2_5_VL_GP(lmms):
         max_remain_ratio: Optional[float] = None,
         enable_frame_redundancy_merge: bool = False,
         frame_redundancy_pooling_mode: str = "mask",
-        frame_redundancy_min_keep_ratio: float = 0.5,
-        frame_redundancy_min_keep_tokens: int = 4,
-        frame_redundancy_similarity_threshold: float = 0.97,
+        frame_redundancy_min_keep_ratio: float = 0.1,
+        frame_redundancy_min_keep_tokens: int = 1,
+        frame_redundancy_similarity_threshold: float = 0.9,
         **kwargs,
     ) -> None:
         super().__init__()

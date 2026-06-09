@@ -51,9 +51,9 @@ class Qwen2_5_VL_GPConfig(Qwen2_5_VLConfig):
         fixed_remain_ratio=None,
         enable_frame_redundancy_merge=False,
         frame_redundancy_pooling_mode="mask",
-        frame_redundancy_min_keep_ratio=0.5,
-        frame_redundancy_min_keep_tokens=4,
-        frame_redundancy_similarity_threshold=0.97,
+        frame_redundancy_min_keep_ratio=0.1,
+        frame_redundancy_min_keep_tokens=1,
+        frame_redundancy_similarity_threshold=0.9,
         **kwargs,
     ):
         super().__init__(
