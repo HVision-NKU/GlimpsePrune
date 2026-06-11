@@ -67,6 +67,7 @@ For more technical details, please refer to our [paper](https://arxiv.org/abs/25
 
 ## 🚀 News
 
+- **`2026.06.08`**: Our revised [paper](https://ieeexplore.ieee.org/document/11557376) has been accepted by **IEEE Transactions on Circuits and Systems for Video Technology (TCSVT)**.
 - **`2025.08.05`**: [Paper](https://arxiv.org/abs/2508.01548) are publicly released!
 - **`2025.08.03`**: [Code](https://github.com/HVision-NKU/GlimpsePrune) and [Models](https://huggingface.co/collections/ashun989/glimpseprune-688d8826ef5bd09db6af145e) are publicly released!
 
@@ -273,14 +274,16 @@ This project is based on the following excellent open-source work, and we expres
 
 If you find our work helpful, please consider citing our paper:
 ```bibtex
-@misc{zeng2025glimpseprune,
-      title={A Glimpse to Compress: Dynamic Visual Token Pruning for Large Vision-Language Models}, 
-      author={Quan-Sheng Zeng and Yunheng Li and Qilong Wang and Peng-Tao Jiang and Zuxuan Wu and Ming-Ming Cheng and Qibin Hou},
-      year={2025},
-      eprint={2508.01548},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2508.01548}, 
+@ARTICLE{11557376,
+  author={Zeng, Quan-Sheng and Li, Yunheng and Wang, Qilong and Jiang, Peng-Tao and Wu, Zuxuan and Cheng, Ming-Ming and Hou, Qibin},
+  journal={IEEE Transactions on Circuits and Systems for Video Technology}, 
+  title={A Glimpse to Compress: Dynamic Visual Token Pruning for Large Vision-Language Models}, 
+  year={2026},
+  volume={},
+  number={},
+  pages={1-1},
+  keywords={Modeling;Visualization;Large language models;Videos;Decoding;Memory;Training;Computers;Conferences;Computer vision},
+  doi={10.1109/TCSVT.2026.3702147}
 }
 ```
 
